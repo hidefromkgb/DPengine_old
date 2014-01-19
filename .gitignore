@@ -1,0 +1,18 @@
+# Binaries
+win32.exe
+linux-gtk
+*.dll
+*.so
+
+# Animations
+Ponies
+
+# Code::Blocks service files
+*.layout
+*.depend
+.obj
+
+# Win32-specific
+Thumbs.db
+*.def
+*.a
