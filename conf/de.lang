@@ -1,14 +1,23 @@
+
+
+
+
+
+
+
+
+
+
 [ Desktop Ponies Engine ]
 Bildsynthesizer
 Betriebssystemabhängig Optionen
 Transparenz deaktivieren
-Wiedergabe pausieren
-Fenster verstecken
+Animation wiedergeben
+Fenster anzeigen
 Beenden
 Üblich (Prozessor)
 OpenGL (Grafikkarte)
 [ leer ]
-Kann OpenGL 2.0 nicht einschalten!
 Konsole öffnen
 Fensterregionen aktivieren
 BGRA aktivieren
