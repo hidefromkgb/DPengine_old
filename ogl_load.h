@@ -120,38 +120,38 @@ extern "C" {
 
 
 
-#define L(c, ...) \
-L4(c,1,0,,,,,,,,,,,,,##__VA_ARGS__) L4(c,0,1,,,,,,,,,##__VA_ARGS__) \
-L4(c,0,2,,,,,        ##__VA_ARGS__) L4(c,0,3,        ##__VA_ARGS__)
+#define _OGL_L(c, ...) \
+_OGL_L4(c,1,0,,,,,,,,,,,,,##__VA_ARGS__) _OGL_L4(c,0,1,,,,,,,,,##__VA_ARGS__) \
+_OGL_L4(c,0,2,,,,,        ##__VA_ARGS__) _OGL_L4(c,0,3,        ##__VA_ARGS__)
 
-#define L4(c, f, n, ...) \
-L3(c,f,n##0,,,,__VA_ARGS__) L3(c,0,n##1,,,__VA_ARGS__) \
-L3(c,0,n##2,,  __VA_ARGS__) L3(c,0,n##3,  __VA_ARGS__)
+#define _OGL_L4(c, f, n, ...) \
+_OGL_L3(c,f,n##0,,,,__VA_ARGS__) _OGL_L3(c,0,n##1,,,__VA_ARGS__) \
+_OGL_L3(c,0,n##2,,  __VA_ARGS__) _OGL_L3(c,0,n##3,  __VA_ARGS__)
 
-#define L3(...) L2(__VA_ARGS__, \
+#define _OGL_L3(...) _OGL_L2(__VA_ARGS__, \
 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, )
 
-#define L2(c, f, \
+#define _OGL_L2(c, f, \
 n00,n01,n02,n03, n04,n05,n06,n07, n08,n09,n0A,n0B, n0C,n0D,n0E,n0F, \
 a00,a01,a02,a03, a04,a05,a06,a07, a08,a09,a0A,a0B, a0C,a0D,a0E,a0F, \
-s, ...) L##s(c, f, n00, a00)
+s, ...) _OGL_L##s(c, f, n00, a00)
 
-#define L1(c, f, n, a) c##f(n, a)
-#define L0(c, f, n, a)
+#define _OGL_L1(c, f, n, a) c##f(n, a)
+#define _OGL_L0(c, f, n, a)
 
-#define P1(n, a)   a _##n
-#define P0(n, a) , P1(n, a)
-#define A1(n, a)   P1(n,  )
-#define A0(n, a)   P0(n,  )
+#define _OGL_P1(n, a)   a _##n
+#define _OGL_P0(n, a) , _OGL_P1(n, a)
+#define _OGL_A1(n, a)   _OGL_P1(n,  )
+#define _OGL_A0(n, a)   _OGL_P0(n,  )
 
-#define F(retn, name, ...) __attribute__((unused))         \
-static retn name(L(P, ##__VA_ARGS__)) {                    \
+#define _OGL_F(retn, name, ...) __attribute__((unused))    \
+static retn name(_OGL_L(_OGL_P, ##__VA_ARGS__)) {          \
     static retn APIENTRY (*func)(__VA_ARGS__) = 0;         \
     if (!(func || (func = (retn APIENTRY (*)(__VA_ARGS__)) \
                            OGL_GET_PROC_ADDR(#name)))) {   \
         OGL_LOAD_ERROR(func, #name);                       \
     }                                                      \
-    return func(L(A, ##__VA_ARGS__));                      \
+    return func(_OGL_L(_OGL_A, ##__VA_ARGS__));            \
 }
 
 __attribute__((unused))
@@ -160,71 +160,72 @@ static GLenum APIENTRY _OGL_Stub() {
 }
 
 #ifndef __APPLE__
-F(GLvoid, glUniform1iv, GLint, GLsizei, GLint*);
-F(GLvoid, glUniform1fv, GLint, GLsizei, GLfloat*);
-F(GLvoid, glUniform2iv, GLint, GLsizei, GLint*);
-F(GLvoid, glUniform2fv, GLint, GLsizei, GLfloat*);
-F(GLvoid, glUniform3iv, GLint, GLsizei, GLint*);
-F(GLvoid, glUniform3fv, GLint, GLsizei, GLfloat*);
-F(GLvoid, glUniform4iv, GLint, GLsizei, GLint*);
-F(GLvoid, glUniform4fv, GLint, GLsizei, GLfloat*);
-F(GLvoid, glUniformMatrix4fv, GLint, GLsizei, GLboolean, GLfloat*);
-F(GLuint, glCreateProgram);
-F(GLvoid, glDeleteProgram, GLuint);
-F(GLvoid, glValidateProgram, GLuint);
-F(GLvoid, glLinkProgram, GLuint);
-F(GLvoid, glUseProgram, GLuint);
-F(GLvoid, glGetProgramInfoLog, GLuint, GLint, GLint*, GLchar*);
-F(GLvoid, glGetShaderInfoLog, GLuint, GLint, GLint*, GLchar*);
-F(GLvoid, glGetProgramiv, GLuint, GLenum, GLint*);
-F(GLvoid, glGetShaderiv, GLuint, GLenum, GLint*);
-F(GLuint, glCreateShader, GLenum);
-F(GLvoid, glDeleteShader, GLuint);
-F(GLvoid, glAttachShader, GLuint, GLuint);
-F(GLvoid, glShaderSource, GLuint, GLuint, const GLchar**, GLint*);
-F(GLvoid, glCompileShader, GLuint);
-F(GLint,  glGetAttribLocation, GLuint, GLchar*);
-F(GLint,  glGetUniformLocation, GLuint, GLchar*);
-F(GLvoid, glEnableVertexAttribArray, GLint);
-F(GLvoid, glDisableVertexAttribArray, GLint);
-F(GLvoid, glVertexAttribPointer, GLuint, GLint, GLenum,
-                                 GLboolean, GLsizei, GLvoid*);
+_OGL_F(GLvoid, glUniform1iv, GLint, GLsizei, GLint*);
+_OGL_F(GLvoid, glUniform1fv, GLint, GLsizei, GLfloat*);
+_OGL_F(GLvoid, glUniform2iv, GLint, GLsizei, GLint*);
+_OGL_F(GLvoid, glUniform2fv, GLint, GLsizei, GLfloat*);
+_OGL_F(GLvoid, glUniform3iv, GLint, GLsizei, GLint*);
+_OGL_F(GLvoid, glUniform3fv, GLint, GLsizei, GLfloat*);
+_OGL_F(GLvoid, glUniform4iv, GLint, GLsizei, GLint*);
+_OGL_F(GLvoid, glUniform4fv, GLint, GLsizei, GLfloat*);
+_OGL_F(GLvoid, glUniformMatrix4fv, GLint, GLsizei, GLboolean, GLfloat*);
+_OGL_F(GLuint, glCreateProgram);
+_OGL_F(GLvoid, glDeleteProgram, GLuint);
+_OGL_F(GLvoid, glValidateProgram, GLuint);
+_OGL_F(GLvoid, glLinkProgram, GLuint);
+_OGL_F(GLvoid, glUseProgram, GLuint);
+_OGL_F(GLvoid, glGetProgramInfoLog, GLuint, GLint, GLint*, GLchar*);
+_OGL_F(GLvoid, glGetShaderInfoLog, GLuint, GLint, GLint*, GLchar*);
+_OGL_F(GLvoid, glGetProgramiv, GLuint, GLenum, GLint*);
+_OGL_F(GLvoid, glGetShaderiv, GLuint, GLenum, GLint*);
+_OGL_F(GLuint, glCreateShader, GLenum);
+_OGL_F(GLvoid, glDeleteShader, GLuint);
+_OGL_F(GLvoid, glAttachShader, GLuint, GLuint);
+_OGL_F(GLvoid, glShaderSource, GLuint, GLuint, const GLchar**, GLint*);
+_OGL_F(GLvoid, glCompileShader, GLuint);
+_OGL_F(GLint,  glGetAttribLocation, GLuint, GLchar*);
+_OGL_F(GLint,  glGetUniformLocation, GLuint, GLchar*);
+_OGL_F(GLvoid, glEnableVertexAttribArray, GLint);
+_OGL_F(GLvoid, glDisableVertexAttribArray, GLint);
+_OGL_F(GLvoid, glVertexAttribPointer, GLuint, GLint, GLenum,
+                                      GLboolean, GLsizei, GLvoid*);
 #ifdef _WIN32
-F(GLvoid, glActiveTexture, GLenum);
-F(GLvoid, glTexImage3D, GLenum, GLint, GLenum, GLsizei, GLsizei,
-                        GLsizei, GLint, GLenum, GLenum, GLvoid*);
-F(GLvoid, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei,
-                           GLsizei, GLsizei, GLenum, GLenum, GLvoid*);
+_OGL_F(GLvoid, glActiveTexture, GLenum);
+_OGL_F(GLvoid, glTexImage3D, GLenum, GLint, GLenum, GLsizei, GLsizei,
+                             GLsizei, GLint, GLenum, GLenum, GLvoid*);
+_OGL_F(GLvoid, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei,
+                                GLsizei, GLsizei, GLenum, GLenum, GLvoid*);
 #endif /** _WIN32 **/
-F(GLvoid, glGenBuffers, GLsizei, GLuint*);
-F(GLvoid, glBindBuffer, GLenum, GLuint);
-F(GLvoid, glBufferData, GLenum, GLsizei, GLvoid*, GLenum);
-F(GLvoid, glBufferSubData, GLenum, GLint, GLsizei, GLvoid*);
-F(GLvoid, glDeleteBuffers, GLsizei, GLuint*);
-F(GLvoid*,glMapBuffer, GLenum, GLenum);
-F(GLvoid, glUnmapBuffer, GLenum);
-F(GLvoid, glGenFramebuffersEXT, GLsizei, GLuint*);
-F(GLvoid, glGenRenderbuffersEXT, GLsizei, GLuint*);
-F(GLvoid, glDeleteFramebuffersEXT, GLsizei, GLuint*);
-F(GLvoid, glDeleteRenderbuffersEXT, GLsizei, GLuint*);
-F(GLvoid, glBindFramebufferEXT, GLenum, GLuint);
-F(GLvoid, glBindRenderbufferEXT, GLenum, GLuint);
-F(GLvoid, glRenderbufferStorageEXT, GLenum, GLenum, GLsizei, GLsizei);
-F(GLvoid, glFramebufferTexture2DEXT, GLenum, GLenum, GLenum, GLuint, GLint);
-F(GLvoid, glFramebufferRenderbufferEXT, GLenum, GLenum, GLenum, GLuint);
+_OGL_F(GLvoid*,glMapBuffer, GLenum, GLenum);
+_OGL_F(GLvoid, glUnmapBuffer, GLenum);
+_OGL_F(GLvoid, glGenBuffers, GLsizei, GLuint*);
+_OGL_F(GLvoid, glBindBuffer, GLenum, GLuint);
+_OGL_F(GLvoid, glBufferData, GLenum, GLsizei, GLvoid*, GLenum);
+_OGL_F(GLvoid, glBufferSubData, GLenum, GLint, GLsizei, GLvoid*);
+_OGL_F(GLvoid, glDeleteBuffers, GLsizei, GLuint*);
+_OGL_F(GLvoid, glGenFramebuffersEXT, GLsizei, GLuint*);
+_OGL_F(GLvoid, glGenRenderbuffersEXT, GLsizei, GLuint*);
+_OGL_F(GLvoid, glDeleteFramebuffersEXT, GLsizei, GLuint*);
+_OGL_F(GLvoid, glDeleteRenderbuffersEXT, GLsizei, GLuint*);
+_OGL_F(GLvoid, glBindFramebufferEXT, GLenum, GLuint);
+_OGL_F(GLvoid, glBindRenderbufferEXT, GLenum, GLuint);
+_OGL_F(GLvoid, glRenderbufferStorageEXT, GLenum, GLenum, GLsizei, GLsizei);
+_OGL_F(GLvoid, glFramebufferRenderbufferEXT, GLenum, GLenum, GLenum, GLuint);
+_OGL_F(GLvoid, glFramebufferTexture2DEXT, GLenum, GLenum, GLenum,
+                                          GLuint, GLint);
 #endif /** !__APPLE__ **/
 
-#undef L
-#undef L4
-#undef L3
-#undef L2
-#undef L1
-#undef L0
-#undef P1
-#undef P0
-#undef A1
-#undef A0
-#undef F
+#undef _OGL_L
+#undef _OGL_L4
+#undef _OGL_L3
+#undef _OGL_L2
+#undef _OGL_L1
+#undef _OGL_L0
+#undef _OGL_P1
+#undef _OGL_P0
+#undef _OGL_A1
+#undef _OGL_A0
+#undef _OGL_F
 
 
 
