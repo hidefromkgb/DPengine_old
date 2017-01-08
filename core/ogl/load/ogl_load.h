@@ -229,11 +229,6 @@ _OGL_F(GLvoid, glFramebufferTexture2DEXT, GLenum, GLenum, GLenum,
 
 
 
-/** for really old compilers **/
-#ifndef va_copy
-#define va_copy __va_copy
-#endif
-
 /** types of texture binding modes **/
 #define OGL_TEX_NSET 0 /** do not bind, just return FTEX **/
 #define OGL_TEX_DFLT 1 /** do a regular bind **/
@@ -362,45 +357,6 @@ static GLboolean _OGL_ShdrAdd(const GLchar *fstr, GLuint prog, GLenum type) {
 
 
 __attribute__((unused))
-static GLvoid _OGL_ShdrMake(GLchar ***shdr, GLchar **tmpl, va_list list) {
-    GLint iter, size;
-    GLchar *retn;
-    va_list dupl;
-
-    for (iter = 0; tmpl[iter]; iter++);
-    *shdr = calloc(iter + 1, sizeof(*tmpl));
-    for (iter = 0; tmpl[iter]; iter++)
-        if (tmpl[iter] == (GLchar*)-1)
-            (*shdr)[iter] = tmpl[iter];
-        else {
-            size = strlen(tmpl[iter]);
-            va_copy(dupl, list);
-            while ((retn = va_arg(dupl, GLchar*)))
-                size += strlen(retn);
-            va_end(dupl);
-            retn = calloc(sizeof(*retn), size + 1);
-            va_copy(dupl, list);
-            vsnprintf(retn, size + 1, tmpl[iter], dupl);
-            va_end(dupl);
-            (*shdr)[iter] = retn;
-        }
-}
-
-
-
-__attribute__((unused))
-static GLvoid _OGL_ShdrFree(GLchar **shdr) {
-    GLint iter;
-
-    for (iter = 0; shdr[iter]; iter++)
-        if (shdr[iter] != (GLchar*)-1)
-            free(shdr[iter]);
-    free(shdr);
-}
-
-
-
-__attribute__((unused))
 static OGL_FTEX *OGL_BindTex(OGL_FVBO *vobj, GLuint bind, GLuint mode) {
     GLuint ktex = bind;
     OGL_FVBO *vtex = vobj;
@@ -496,13 +452,33 @@ static GLenum OGL_LoadTex(OGL_FTEX *retn,
 
 
 #define OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, vshd, pshd, ...) \
-       _OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, vshd, pshd, ##__VA_ARGS__, 0)
+       _OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, vshd, pshd,      \
+                    ##__VA_ARGS__, (void*)0)
 __attribute__((unused))
 static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                               GLuint catr, OGL_UNIF *patr,
                               GLuint cuni, OGL_UNIF *puni,
                               GLchar *vshd[], GLchar *pshd[], ...) {
-    GLchar **vert, **pixl, *curp, *curv;
+    #define _OGL_MakeShdr(shdr, tmpl) do {                   \
+        for (iter = 0; tmpl[iter]; iter++);                  \
+        shdr = calloc(iter + 1, sizeof(*tmpl));              \
+        for (iter = 0; tmpl[iter]; iter++)                   \
+            if (tmpl[iter] == (GLchar*)-1)                   \
+                shdr[iter] = tmpl[iter];                     \
+            else {                                           \
+                indx = strlen(tmpl[iter]);                   \
+                va_start(list, pshd);                        \
+                while ((curv = va_arg(list, GLchar*)))       \
+                    indx += strlen(curv);                    \
+                va_end(list);                                \
+                curv = calloc(sizeof(*curv), indx + 1);      \
+                va_start(list, pshd);                        \
+                vsnprintf(curv, indx + 1, tmpl[iter], list); \
+                shdr[iter] = curv;                           \
+                va_end(list);                                \
+            }                                                \
+    } while (0)
+    GLchar **vert, **pixl, *curv, *curp;
     GLint iter, indx, ctmp, step;
     GLboolean stop;
     OGL_FVBO *retn;
@@ -510,15 +486,11 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
 
     retn = calloc(1, sizeof(*retn));
     if (vshd && pshd) {
+        _OGL_MakeShdr(vert, vshd);
+        _OGL_MakeShdr(pixl, pshd);
         retn->cshd = 0;
-        curp = curv = 0;
+        curv = curp = 0;
         stop = GL_FALSE;
-        va_start(list, pshd);
-        _OGL_ShdrMake(&vert, vshd, list);
-        va_end(list);
-        va_start(list, pshd);
-        _OGL_ShdrMake(&pixl, pshd, list);
-        va_end(list);
         while (pixl[retn->cshd])
             retn->cshd++;
         retn->pshd = calloc(retn->cshd, sizeof(*retn->pshd));
@@ -563,8 +535,14 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
             /** Only executed if it`s impossible to build the shader **/
             glDeleteProgram(retn->pshd[iter].prog);
         }
-        _OGL_ShdrFree(vert);
-        _OGL_ShdrFree(pixl);
+        for (iter = 0; vert[iter]; iter++)
+            if (vert[iter] != (GLchar*)-1)
+                free(vert[iter]);
+        free(vert);
+        for (iter = 0; pixl[iter]; iter++)
+            if (pixl[iter] != (GLchar*)-1)
+                free(pixl[iter]);
+        free(pixl);
     }
     if (ctex) {
         retn->ctex = ctex;
@@ -615,6 +593,7 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     return retn;
+    #undef _OGL_MakeShdr
 }
 
 
