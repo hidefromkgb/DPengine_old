@@ -45,11 +45,11 @@ extern "C" {
 #define OGL_TEXTURE_ERROR(s) printf("%s!\n", (s))
 #endif
 #ifndef OGL_SHADER_ERROR
-#define OGL_SHADER_ERROR(p, s) printf("%s error!\n%s\n\n", (p)? "Shader" : "Shader program", (s))
+#define OGL_SHADER_ERROR(p, s) printf("%s error!\n%s\n\n", \
+                                     (p)? "Shader" : "Shader program", (s))
 #endif
 #ifndef OGL_LOAD_ERROR
-#define OGL_LOAD_ERROR(f, s) do { printf("ERROR: cannot load '%s'!\n", (s)); \
-                                  f = (GLvoid*)_OGL_Stub; } while (0)
+#define OGL_LOAD_ERROR(p, s) printf("ERROR: can`t load '%s'!\n", (s))
 #endif
 
 #ifdef _WIN32
@@ -146,17 +146,20 @@ s, ...) _OGL_L##s(c, f, n00, a00)
 
 #define _OGL_F(retn, name, ...) __attribute__((unused))    \
 static retn name(_OGL_L(_OGL_P, ##__VA_ARGS__)) {          \
-    static retn APIENTRY (*func)(__VA_ARGS__) = 0;         \
-    if (!(func || (func = (retn APIENTRY (*)(__VA_ARGS__)) \
+    static APIENTRY retn (*func)(__VA_ARGS__) = 0;         \
+    if (!(func || (func = (APIENTRY retn (*)(__VA_ARGS__)) \
                            OGL_GET_PROC_ADDR(#name)))) {   \
         OGL_LOAD_ERROR(func, #name);                       \
+        if (!func) {                                       \
+            retn (*fail)() = (void*)_OGL_Stub;             \
+            return fail();                                 \
+        }                                                  \
     }                                                      \
     return func(_OGL_L(_OGL_A, ##__VA_ARGS__));            \
 }
 
-__attribute__((unused))
-static GLenum APIENTRY _OGL_Stub() {
-    return 0;
+static GLvoid *_OGL_Stub() {
+    return (GLvoid*)0;
 }
 
 #ifndef __APPLE__
@@ -189,6 +192,7 @@ _OGL_F(GLvoid, glEnableVertexAttribArray, GLint);
 _OGL_F(GLvoid, glDisableVertexAttribArray, GLint);
 _OGL_F(GLvoid, glVertexAttribPointer, GLuint, GLint, GLenum,
                                       GLboolean, GLsizei, GLvoid*);
+_OGL_F(GLvoid, glGenerateMipmap, GLenum);
 #ifdef _WIN32
 _OGL_F(GLvoid, glActiveTexture, GLenum);
 _OGL_F(GLvoid, glTexImage3D, GLenum, GLint, GLenum, GLsizei, GLsizei,
@@ -230,7 +234,7 @@ _OGL_F(GLvoid, glFramebufferTexture2DEXT, GLenum, GLenum, GLenum,
 
 
 /** types of texture binding modes **/
-#define OGL_TEX_NSET 0 /** do not bind, just return FTEX **/
+#define OGL_TEX_NSET 0 /** do not bind, just return OGL_FTEX **/
 #define OGL_TEX_DFLT 1 /** do a regular bind **/
 #define OGL_TEX_FRMB 2 /** do a framebuffer bind **/
 
@@ -417,10 +421,15 @@ static GLuint OGL_MakeTex(OGL_FTEX *retn,
                          retn->zdim, 0, retn->mode, retn->type, data);
         }
         iter = glGetError();
-        glTexParameteri(retn->trgt, GL_TEXTURE_MAG_FILTER, tmag);
-        glTexParameteri(retn->trgt, GL_TEXTURE_MIN_FILTER, tmin);
         glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_S, wrap);
         glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_T, wrap);
+        glTexParameteri(retn->trgt, GL_TEXTURE_MAG_FILTER, tmag);
+        glTexParameteri(retn->trgt, GL_TEXTURE_MIN_FILTER, tmin);
+        if ((tmin == GL_NEAREST_MIPMAP_NEAREST)
+        ||  (tmin == GL_NEAREST_MIPMAP_LINEAR)
+        ||  (tmin == GL_LINEAR_MIPMAP_NEAREST)
+        ||  (tmin == GL_LINEAR_MIPMAP_LINEAR))
+            glGenerateMipmap(retn->trgt);
         glBindTexture(retn->trgt, 0);
     }
     return iter;
