@@ -49,7 +49,7 @@ extern "C" {
                                      (p)? "Shader" : "Shader program", (s))
 #endif
 #ifndef OGL_LOAD_ERROR
-#define OGL_LOAD_ERROR(p, s) printf("ERROR: can`t load '%s'!\n", (s))
+#define OGL_LOAD_ERROR(p, s) _OGL_FailDispatcher((GLvoid**)&p, (GLchar*)(s))
 #endif
 
 #ifdef _WIN32
@@ -68,9 +68,14 @@ extern "C" {
     #define GL_FRAMEBUFFER                    0x8D40
     #define GL_RENDERBUFFER                   0x8D41
     #define GL_COLOR_ATTACHMENT0              0x8CE0
+    #define GL_TEXTURE_SWIZZLE_R              0x8E42
+    #define GL_TEXTURE_SWIZZLE_G              0x8E43
+    #define GL_TEXTURE_SWIZZLE_B              0x8E44
+    #define GL_TEXTURE_SWIZZLE_A              0x8E45
     #define GL_TEXTURE0                       0x84C0
     #define GL_TEXTURE_CUBE_MAP               0x8513
     #define GL_TEXTURE_CUBE_MAP_POSITIVE_X    0x8515
+    #define GL_TEXTURE_DEPTH                  0x8071
     #define GL_TEXTURE_WRAP_R                 0x8072
     #define GL_TEXTURE_3D                     0x806F
     #define GL_TEXTURE_2D_ARRAY               0x8C1A
@@ -95,6 +100,7 @@ extern "C" {
     #define GL_RGBA_INTEGER                   0x8D99
     #define GL_BGR_INTEGER                    0x8D9A
     #define GL_BGRA_INTEGER                   0x8D9B
+    #define GL_BGR                            0x80E0
     #define GL_BGRA                           0x80E1
     #define GL_R32F                           0x822E
     #define GL_RG32F                          0x8230
@@ -158,10 +164,20 @@ static retn name(_OGL_L(_OGL_P, ##__VA_ARGS__)) {          \
     return func(_OGL_L(_OGL_A, ##__VA_ARGS__));            \
 }
 
-static GLboolean OGL_Error = GL_FALSE;
+static APIENTRY GLvoid OGL_glGenerateMipmap(GLenum);
 
+__attribute__((unused))
+static GLvoid _OGL_FailDispatcher(GLvoid **func, GLchar *name) {
+    printf("ERROR: can`t load '%s'!", name);
+    if (!strcmp(name, "glGenerateMipmap")) {
+        printf(" Emulating on CPU.");
+        *func = OGL_glGenerateMipmap;
+    }
+    printf("\n");
+}
+
+__attribute__((unused))
 static GLvoid *_OGL_Stub() {
-    OGL_Error = GL_TRUE;
     return (GLvoid*)0;
 }
 
@@ -233,6 +249,103 @@ _OGL_F(GLvoid, glFramebufferTexture2DEXT, GLenum, GLenum, GLenum,
 #undef _OGL_A1
 #undef _OGL_A0
 #undef _OGL_F
+
+/** software fallback in case there is no glGenerateMipmap in the system
+    (may be used separately, without ever referring to glGenerateMipmap) **/
+__attribute__((unused))
+static APIENTRY GLvoid OGL_glGenerateMipmap(GLenum what) {
+    GLint step, iter, indx, frmt, type, swiz, rgba[4] = {},
+          xptr, yptr, xnew, ynew, xdim, ydim;
+    unsigned char *psub, *pdub; float *pssf, *pdsf;
+    GLvoid *sptr, *dptr, *temp;
+
+    /** [TODO:] maybe also implement 3D textures and/or cubemaps? **/
+    if (what != GL_TEXTURE_2D)
+        return;
+
+    glGetTexLevelParameteriv(what, 0, GL_TEXTURE_WIDTH, &xdim);
+    glGetTexLevelParameteriv(what, 0, GL_TEXTURE_HEIGHT, &ydim);
+    glGetTexLevelParameteriv(what, 0, GL_TEXTURE_INTERNAL_FORMAT, &frmt);
+    glGetTexParameteriv(what, GL_TEXTURE_SWIZZLE_R, &rgba[0]);
+    glGetTexParameteriv(what, GL_TEXTURE_SWIZZLE_G, &rgba[1]);
+    glGetTexParameteriv(what, GL_TEXTURE_SWIZZLE_B, &rgba[2]);
+    glGetTexParameteriv(what, GL_TEXTURE_SWIZZLE_A, &rgba[3]);
+    for (step = 0; step < 4; step++)
+        rgba[step] = (rgba[step] != GL_RED)?  (rgba[step] != GL_GREEN)?
+                     (rgba[step] != GL_BLUE)? (rgba[step] != GL_ALPHA)?
+                      0 : 4 : 3 : 2 : 1;
+    switch (rgba[0] * 0x1000 + rgba[1] * 0x0100
+          + rgba[2] * 0x0010 + rgba[3] * 0x0001) {
+        case 0x1234: swiz = GL_RGBA;  break;
+        case 0x3214: swiz = GL_BGRA;  break;
+        case 0x1230: swiz = GL_RGB;   break;
+        case 0x3210: swiz = GL_BGR;   break;
+        case 0x1200: swiz = GL_RG;    break;
+        case 0x1000: swiz = GL_RED;   break;
+        case 0x2000: swiz = GL_GREEN; break;
+        case 0x3000: swiz = GL_BLUE;  break;
+        case 0x4000: swiz = GL_ALPHA; break;
+        default: return;
+    }
+    step = 0;
+    switch (frmt) {
+        case GL_RGBA:
+        case GL_RGBA8:   step++;
+        case GL_RGB:
+        case GL_RGB8:    step++;
+        case GL_RG:
+        case GL_RG8:     step++;
+        case GL_RED:
+        case GL_R8:      step++; type = GL_UNSIGNED_BYTE; break;
+        case GL_RGBA32F: step++;
+        case GL_RGB32F:  step++;
+        case GL_RG32F:   step++;
+        case GL_R32F:    step++; type = GL_FLOAT; break;
+        default: return;
+    }
+    xnew = (xdim > 1)? xdim >> 1 : 1;
+    ynew = (ydim > 1)? ydim >> 1 : 1;
+    dptr = malloc(xnew * ynew * step * ((type == GL_FLOAT)? 4 : 1));
+    sptr = malloc(xdim * ydim * step * ((type == GL_FLOAT)? 4 : 1));
+    glGetTexImage(what, 0, frmt, type, sptr);
+    iter = 0;
+    while ((xdim | ydim) > 1) {
+        xnew = (xdim > 1)? xdim >> 1 : 1;
+        ynew = (ydim > 1)? ydim >> 1 : 1;
+        if (type == GL_FLOAT)
+            for (pdsf = dptr, pssf = ((float*)sptr) + step - 1;
+                                     ((float*)sptr) <= pssf; pssf--)
+                for (yptr = 0; yptr < ynew; yptr++)
+                    for (xptr = 0; xptr < xnew; xptr++) {
+                        indx = xdim * (yptr << 1) + (xptr << 1);
+                        pdsf[(xnew * yptr + xptr) * step] =
+                            0.25 * (pssf[(indx           ) * step]
+                                 +  pssf[(indx + 1       ) * step]
+                                 +  pssf[(indx +     xdim) * step]
+                                 +  pssf[(indx + 1 + xdim) * step]);
+                    }
+        else
+            for (pdub = dptr, psub = ((unsigned char*)sptr) + step - 1;
+                                     ((unsigned char*)sptr) <= psub; psub--)
+                for (yptr = 0; yptr < ynew; yptr++)
+                    for (xptr = 0; xptr < xnew; xptr++) {
+                        indx = xdim * (yptr << 1) + (xptr << 1);
+                        indx = ((GLint)psub[(indx           ) * step]
+                             +  (GLint)psub[(indx + 1       ) * step]
+                             +  (GLint)psub[(indx +     xdim) * step]
+                             +  (GLint)psub[(indx + 1 + xdim) * step]);
+                        pdub[(xnew * yptr + xptr) * step] = indx >> 2;
+                    }
+        glTexImage2D(what, ++iter, frmt, xnew, ynew, 0, swiz, type, dptr);
+        xdim = xnew;
+        ydim = ynew;
+        temp = sptr;
+        sptr = dptr;
+        dptr = temp;
+    }
+    free(sptr);
+    free(dptr);
+}
 
 
 
@@ -431,15 +544,8 @@ static GLuint OGL_MakeTex(OGL_FTEX *retn,
         if ((tmin == GL_NEAREST_MIPMAP_NEAREST)
         ||  (tmin == GL_NEAREST_MIPMAP_LINEAR)
         ||  (tmin == GL_LINEAR_MIPMAP_NEAREST)
-        ||  (tmin == GL_LINEAR_MIPMAP_LINEAR)) {
-            OGL_Error = GL_FALSE;
+        ||  (tmin == GL_LINEAR_MIPMAP_LINEAR))
             glGenerateMipmap(retn->trgt);
-            if (OGL_Error)
-                glTexParameteri(retn->trgt, GL_TEXTURE_MIN_FILTER,
-                              ((tmin == GL_NEAREST_MIPMAP_NEAREST)
-                            || (tmin == GL_NEAREST_MIPMAP_LINEAR))?
-                                GL_NEAREST : GL_LINEAR);
-        }
         glBindTexture(retn->trgt, 0);
     }
     return iter;
