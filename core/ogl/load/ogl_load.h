@@ -158,7 +158,10 @@ static retn name(_OGL_L(_OGL_P, ##__VA_ARGS__)) {          \
     return func(_OGL_L(_OGL_A, ##__VA_ARGS__));            \
 }
 
+static GLboolean OGL_Error = GL_FALSE;
+
 static GLvoid *_OGL_Stub() {
+    OGL_Error = GL_TRUE;
     return (GLvoid*)0;
 }
 
@@ -428,8 +431,15 @@ static GLuint OGL_MakeTex(OGL_FTEX *retn,
         if ((tmin == GL_NEAREST_MIPMAP_NEAREST)
         ||  (tmin == GL_NEAREST_MIPMAP_LINEAR)
         ||  (tmin == GL_LINEAR_MIPMAP_NEAREST)
-        ||  (tmin == GL_LINEAR_MIPMAP_LINEAR))
+        ||  (tmin == GL_LINEAR_MIPMAP_LINEAR)) {
+            OGL_Error = GL_FALSE;
             glGenerateMipmap(retn->trgt);
+            if (OGL_Error)
+                glTexParameteri(retn->trgt, GL_TEXTURE_MIN_FILTER,
+                              ((tmin == GL_NEAREST_MIPMAP_NEAREST)
+                            || (tmin == GL_NEAREST_MIPMAP_LINEAR))?
+                                GL_NEAREST : GL_LINEAR);
+        }
         glBindTexture(retn->trgt, 0);
     }
     return iter;
