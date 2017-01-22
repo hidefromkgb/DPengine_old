@@ -110,18 +110,18 @@ extern "C" {
     #define WGL_CONTEXT_MAJOR_VERSION_ARB     0x2091
     #define WGL_CONTEXT_MINOR_VERSION_ARB     0x2092
     #define WGL_CONTEXT_FLAGS_ARB             0x2094
-    #define OGL_GET_PROC_ADDR(s) wglGetProcAddress(s)
+    #define _OGL_GET_FUNCTION(s) wglGetProcAddress(s)
 #elif __APPLE__
     #include <OpenGL/gl.h>
     #include <dlfcn.h>
     #define APIENTRY
     #define GL_RGBA32F                        0x8814
     #define GL_TEXTURE_2D_ARRAY               0x8C1A
-    #define OGL_GET_PROC_ADDR(s) dlsym(RTLD_DEFAULT, s)
+    #define _OGL_GET_FUNCTION(s) dlsym(RTLD_DEFAULT, s)
 #else
     #include <GL/gl.h>
     #include <GL/glx.h>
-    #define OGL_GET_PROC_ADDR(s) glXGetProcAddress((GLubyte*)(s))
+    #define _OGL_GET_FUNCTION(s) glXGetProcAddress((GLubyte*)(s))
 #endif
 
 
@@ -190,7 +190,7 @@ static GLvoid *_OGL_MainLoader(GLchar *name) {
     while (!retn && (++iter < sizeof(suff) / sizeof(*suff))) {
         *indx = 0;
         strcat(indx, suff[iter]);
-        retn = (GLvoid*)OGL_GET_PROC_ADDR(temp);
+        retn = (GLvoid*)_OGL_GET_FUNCTION(temp);
     }
     return retn;
 }
@@ -225,7 +225,6 @@ _OGL_F(GLvoid, glEnableVertexAttribArray, GLint);
 _OGL_F(GLvoid, glDisableVertexAttribArray, GLint);
 _OGL_F(GLvoid, glVertexAttribPointer, GLuint, GLint, GLenum,
                                       GLboolean, GLsizei, GLvoid*);
-_OGL_F(GLvoid, glGenerateMipmap, GLenum);
 #ifdef _WIN32
 _OGL_F(GLvoid, glActiveTexture, GLenum);
 _OGL_F(GLvoid, glTexImage3D, GLenum, GLint, GLenum, GLsizei, GLsizei,
@@ -240,6 +239,8 @@ _OGL_F(GLvoid, glBindBuffer, GLenum, GLuint);
 _OGL_F(GLvoid, glBufferData, GLenum, GLsizei, GLvoid*, GLenum);
 _OGL_F(GLvoid, glBufferSubData, GLenum, GLint, GLsizei, GLvoid*);
 _OGL_F(GLvoid, glDeleteBuffers, GLsizei, GLuint*);
+/** these require GL_(ARB|EXT)_framebuffer_object that is not in OGL 2.0,
+    but still, they are extremely useful, so try to load them anyway! **/
 _OGL_F(GLvoid, glGenFramebuffers, GLsizei, GLuint*);
 _OGL_F(GLvoid, glGenRenderbuffers, GLsizei, GLuint*);
 _OGL_F(GLvoid, glDeleteFramebuffers, GLsizei, GLuint*);
@@ -249,6 +250,8 @@ _OGL_F(GLvoid, glBindRenderbuffer, GLenum, GLuint);
 _OGL_F(GLvoid, glRenderbufferStorage, GLenum, GLenum, GLsizei, GLsizei);
 _OGL_F(GLvoid, glFramebufferRenderbuffer, GLenum, GLenum, GLenum, GLuint);
 _OGL_F(GLvoid, glFramebufferTexture2D, GLenum, GLenum, GLenum, GLuint, GLint);
+_OGL_F(GLvoid, glGenerateMipmap, GLenum);
+/** end of GL_(ARB|EXT)_framebuffer_object **/
 #endif /** !__APPLE__ **/
 
 #undef _OGL_L
@@ -388,7 +391,7 @@ __attribute__((unused))
 static GLboolean _OGL_ShdrAdd(const GLchar *fstr, GLuint prog, GLenum type) {
     GLint slen, shad;
 
-    if (!(shad = glCreateShader(type))) {
+    if (!fstr || !(shad = glCreateShader(type))) {
         OGL_SHADER_ERROR(1, "Shader allocation failed");
         glDeleteProgram(prog);
         return GL_FALSE;
@@ -517,16 +520,16 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                               GLuint catr, OGL_UNIF *patr,
                               GLuint cuni, OGL_UNIF *puni,
                               GLchar *tmpl[], ...) {
-    GLchar **shdr, *curv, *curp;
     GLint iter, indx, ctmp, step;
+    GLchar **shdr, *curv, *curp;
     OGL_FVBO *retn;
     va_list list;
 
     retn = calloc(1, sizeof(*retn));
     if (tmpl) {
-        for (iter = 0; tmpl[iter]; iter++);
-        shdr = calloc(iter + 1, sizeof(*tmpl));
-        for (iter = 0; tmpl[iter]; iter++)
+        for (; tmpl[retn->cshd]; retn->cshd++);
+        shdr = calloc(retn->cshd + 1, sizeof(*tmpl));
+        for (iter = 0; iter < retn->cshd; iter++)
             if (tmpl[iter] == (GLchar*)-1)
                 shdr[iter] = tmpl[iter];
             else {
@@ -541,12 +544,8 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                 shdr[iter] = curv;
                 va_end(list);
             }
-        retn->cshd = 0;
         curv = curp = 0;
-        while (shdr[retn->cshd])
-            retn->cshd++;
-        retn->cshd >>= 1;
-        retn->pshd = calloc(retn->cshd, sizeof(*retn->pshd));
+        retn->pshd = calloc(retn->cshd >>= 1, sizeof(*retn->pshd));
         for (iter = 0; iter < retn->cshd; iter++) {
             if (shdr[iter * 2 + 0] != (GLchar*)-1)
                 curv = shdr[iter * 2 + 0];
