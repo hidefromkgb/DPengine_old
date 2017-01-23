@@ -728,7 +728,7 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
 
 
 __attribute__((unused))
-static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad) {
+static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad, GLuint cind) {
     typedef _OGL_FVBO __OGL_FVBO;
 
     __OGL_FVBO *vobj = (__OGL_FVBO*)draw;
@@ -802,7 +802,8 @@ static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad) {
 
                 default: continue;
             }
-        glDrawElements(vobj->elem, vobj->cind, GL_UNSIGNED_INT, 0);
+        cind = (cind && (cind < vobj->cind))? cind : vobj->cind;
+        glDrawElements(vobj->elem, cind, GL_UNSIGNED_INT, 0);
         for (iter = 1; iter < vobj->catr; iter++)
             if (vobj->patr[iter].aloc != -1)
                 glDisableVertexAttribArray(vobj->patr[iter].aloc);
