@@ -45,8 +45,9 @@ extern "C" {
 #define OGL_TEXTURE_ERROR(s) printf("%s!\n", (s))
 #endif
 #ifndef OGL_SHADER_ERROR
-#define OGL_SHADER_ERROR(p, s) printf("%s error!\n%s\n\n", \
-                                     (p)? "Shader" : "Shader program", (s))
+#define OGL_SHADER_ERROR(p, s) printf("%s error!\n%s\n\n",             \
+                                     (p)? "Shader" : "Shader program", \
+                                     (s)? (s) : "[NO LOG RETURNED]")
 #endif
 #ifndef OGL_LOAD_ERROR
 #define OGL_LOAD_ERROR(p, s) _OGL_FailDispatcher((GLvoid**)&p, (GLchar*)(s))
@@ -59,6 +60,7 @@ extern "C" {
     #define GL_COMPILE_STATUS                 0x8B81
     #define GL_LINK_STATUS                    0x8B82
     #define GL_VALIDATE_STATUS                0x8B83
+    #define GL_INFO_LOG_LENGTH                0x8B84
     #define GL_FRAGMENT_SHADER                0x8B30
     #define GL_VERTEX_SHADER                  0x8B31
     #define GL_READ_ONLY                      0x88B8
@@ -107,9 +109,6 @@ extern "C" {
     #define GL_RGB32F                         0x8815
     #define GL_RGBA32F                        0x8814
     #define GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS 0x8B4C
-    #define WGL_CONTEXT_MAJOR_VERSION_ARB     0x2091
-    #define WGL_CONTEXT_MINOR_VERSION_ARB     0x2092
-    #define WGL_CONTEXT_FLAGS_ARB             0x2094
     #define _OGL_GET_FUNCTION(s) wglGetProcAddress(s)
 #elif __APPLE__
     #include <OpenGL/gl.h>
@@ -332,63 +331,70 @@ typedef struct {
     GLchar *name;
 } OGL_UNIF;
 
-typedef struct {
-    GLenum trgt, type, mode;
-    GLuint xdim, ydim, zdim, indx;
-    struct _OGL_FVBO *orig;
-} OGL_FTEX;
+typedef struct OGL_FTEX OGL_FTEX;
+#define _OGL_FTEX struct {         \
+    GLenum trgt, type, mode;       \
+    GLuint xdim, ydim, zdim, indx; \
+    GLvoid *orig;                  \
+}
 
-typedef struct _OGL_FVBO {
-    GLenum    elem;
-    GLuint    cind;
-    GLuint    ctex;
-    OGL_FTEX *ptex;
-    GLuint    catr;
-    GLuint   *pbuf;
-    struct {
-        GLint  aloc;
-        GLint  ecnt;
-        GLenum elem;
-    } *patr;
-    GLuint    cshd;
-    struct {
-        GLuint    prog;
-        GLuint    cuni;
-        OGL_UNIF *puni;
-    } *pshd;
-} OGL_FVBO;
+typedef struct OGL_FVBO OGL_FVBO;
+#define _OGL_FVBO struct { \
+    GLenum      elem;      \
+    GLuint      cind;      \
+    GLuint      ctex;      \
+    _OGL_FTEX **ptex;      \
+    GLuint      catr;      \
+    GLuint     *pbuf;      \
+    struct {               \
+        GLint   aloc;      \
+        GLint   ecnt;      \
+        GLenum  elem;      \
+    } *patr;               \
+    GLuint      cshd;      \
+    struct {               \
+        GLuint    prog;    \
+        GLuint    cuni;    \
+        OGL_UNIF *puni;    \
+    } *pshd;               \
+}
 
 
 
 __attribute__((unused))
-static GLint _OGL_ShdrStatus(GLuint prog, GLboolean shad, GLenum parm) {
-    GLchar buff[2048];
-    GLint stat, slen;
+static GLint _OGL_EnumShader(GLuint prog, GLboolean shad, GLenum parm) {
+    GLint stat, size = 0;
+    GLchar *buff = 0;
 
-    buff[sizeof(buff) / sizeof(*buff) - 1] = 0;
     if (shad) {
         glGetShaderiv(prog, parm, &stat);
         if (stat != GL_TRUE) {
-            glGetShaderInfoLog(prog, sizeof(buff) / sizeof(*buff) - 1,
-                              &slen, buff);
-            OGL_SHADER_ERROR(1, (GLchar*)buff);
+            glGetShaderiv(prog, GL_INFO_LOG_LENGTH, &size);
+            if (size)
+                glGetShaderInfoLog(prog, size, &size,
+                                   buff = calloc(1, size + 1));
+            OGL_SHADER_ERROR(1, buff);
         }
     }
     else {
         glGetProgramiv(prog, parm, &stat);
         if (stat != GL_TRUE) {
-            glGetProgramInfoLog(prog, sizeof(buff) / sizeof(*buff) - 1,
-                               &slen, buff);
-            OGL_SHADER_ERROR(0, (GLchar*)buff);
+            glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &size);
+            if (size)
+                glGetProgramInfoLog(prog, size, &size,
+                                    buff = calloc(1, size + 1));
+            OGL_SHADER_ERROR(0, buff);
         }
     }
+    free(buff);
     return stat;
 }
 
 
 
 __attribute__((unused))
-static GLboolean _OGL_ShdrAdd(const GLchar *fstr, GLuint prog, GLenum type) {
+static GLboolean _OGL_MakeShader(const GLchar *fstr,
+                                 GLuint prog, GLenum type) {
     GLint slen, shad;
 
     if (!fstr || !(shad = glCreateShader(type))) {
@@ -400,7 +406,7 @@ static GLboolean _OGL_ShdrAdd(const GLchar *fstr, GLuint prog, GLenum type) {
     glShaderSource(shad, 1, &fstr, &slen);
     glCompileShader(shad); /** may emit a ';' to STDOUT, this is normal **/
 
-    if (_OGL_ShdrStatus(shad, GL_TRUE, GL_COMPILE_STATUS) != GL_TRUE) {
+    if (_OGL_EnumShader(shad, GL_TRUE, GL_COMPILE_STATUS) != GL_TRUE) {
         glDeleteShader(shad);
         glDeleteProgram(prog);
         return GL_FALSE;
@@ -413,66 +419,136 @@ static GLboolean _OGL_ShdrAdd(const GLchar *fstr, GLuint prog, GLenum type) {
 
 
 __attribute__((unused))
-static OGL_FTEX *OGL_BindTex(OGL_FVBO *vobj, GLuint bind, GLuint mode) {
-    GLuint ktex = bind;
-    OGL_FVBO *vtex = vobj;
-    OGL_FTEX *ftex;
+static OGL_FTEX **OGL_BindTex(OGL_FVBO *vobj, GLuint bind, GLuint mode) {
+    typedef _OGL_FTEX __OGL_FTEX;
+    typedef _OGL_FVBO __OGL_FVBO;
 
-    if (!vtex)
+    GLuint ktex;
+    GLvoid *temp;
+    __OGL_FTEX *ftex;
+    __OGL_FVBO *vtex;
+
+    if (!(vtex = (__OGL_FVBO*)vobj))
         return 0;
-    if (vtex->ptex[ktex].orig) {
+    if (vtex->ptex[ktex = bind] && !vtex->ptex[ktex]->trgt
+                                &&  vtex->ptex[ktex]->orig) {
         do {
-            ktex = (ftex = &vtex->ptex[ktex])->indx;
-            if ((vtex = ftex->orig) == vobj) {
+            if (!(ftex = (__OGL_FTEX*)vtex->ptex[ktex])) {
+                OGL_TEXTURE_ERROR("Invalid texture pointer");
+                return 0;
+            }
+            if ((OGL_FVBO*)(vtex = (__OGL_FVBO*)ftex->orig) == vobj) {
                 OGL_TEXTURE_ERROR("Texture circular cross-ref");
                 return 0;
             }
+            ktex = ftex->indx;
         } while (vtex);
-        vobj->ptex[ktex = bind] = *ftex;
+        temp = (vtex = (__OGL_FVBO*)vobj)->ptex[ktex = bind]->orig;
+        memmove(vtex->ptex[ktex], ftex, sizeof(*ftex));
+        vtex->ptex[ktex]->orig = temp;
     }
     if (mode == OGL_TEX_FRMB)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, vobj->ptex[ktex].indx, 0);
+                               GL_TEXTURE_2D, vtex->ptex[ktex]->indx, 0);
     else if (mode == OGL_TEX_DFLT) {
         glActiveTexture(GL_TEXTURE0 + bind);
-        glBindTexture(vobj->ptex[ktex].trgt, vobj->ptex[ktex].indx);
+        glBindTexture(vtex->ptex[ktex]->trgt, vtex->ptex[ktex]->indx);
     }
-    return &vobj->ptex[ktex];
+    return (OGL_FTEX**)&vtex->ptex[ktex];
 }
 
 
 
 __attribute__((unused))
-static GLuint OGL_MakeTex(OGL_FTEX *retn,
-                          GLuint xdim, GLuint ydim, GLuint zdim, GLenum trgt,
-                          GLenum wrap, GLint  tmag, GLint  tmin, GLenum type,
-                          GLenum frmt, GLenum mode, GLvoid *data) {
+static GLvoid OGL_EnumTex(OGL_FTEX *ftex,
+                          GLenum *trgt, GLenum *type, GLenum *mode,
+                          GLuint *xdim, GLuint *ydim, GLuint *zdim) {
+    if (ftex) {
+        if (trgt)
+           *trgt = ((_OGL_FTEX*)ftex)->trgt;
+        if (type)
+           *type = ((_OGL_FTEX*)ftex)->type;
+        if (mode)
+           *mode = ((_OGL_FTEX*)ftex)->mode;
+        if (xdim)
+           *xdim = ((_OGL_FTEX*)ftex)->xdim;
+        if (ydim)
+           *ydim = ((_OGL_FTEX*)ftex)->ydim;
+        if (zdim)
+           *zdim = ((_OGL_FTEX*)ftex)->zdim;
+    }
+}
+
+
+
+__attribute__((unused))
+static GLvoid OGL_FreeTex(OGL_FTEX **ftex) {
+    if (*ftex && !((_OGL_FTEX*)*ftex)->orig) {
+        glBindTexture(((_OGL_FTEX*)*ftex)->trgt, 0);
+        glDeleteTextures(1, &((_OGL_FTEX*)*ftex)->indx);
+    }
+    free(*ftex);
+    *ftex = 0;
+}
+
+
+
+__attribute__((unused))
+static GLvoid OGL_LinkTex(OGL_FVBO *dvbo, GLuint dind,
+                          OGL_FVBO *svbo, GLuint sind) {
+    OGL_FTEX **ftex = OGL_BindTex(dvbo, dind, OGL_TEX_NSET);
+
+    if (ftex) {
+        OGL_FreeTex(ftex);
+        *ftex = calloc(1, sizeof(_OGL_FTEX));
+        ((_OGL_FTEX*)*ftex)->orig = svbo;
+        ((_OGL_FTEX*)*ftex)->indx = sind;
+    }
+}
+
+
+
+__attribute__((unused))
+static OGL_FTEX *OGL_MakeTex(GLuint xdim, GLuint ydim, GLuint zdim,
+                             GLenum trgt, GLenum wrap, GLint tmag, GLint tmin,
+                             GLenum type, GLenum frmt, GLenum mode,
+                             GLvoid *data) {
     GLuint iter, iend;
+    _OGL_FTEX *retn;
 
-    iter = (GLuint)GL_INVALID_VALUE;
-    if (retn) {
-        *retn = (OGL_FTEX){trgt, type, mode, xdim, ydim, zdim};
-        glGenTextures(1, &retn->indx);
-        glBindTexture(retn->trgt, retn->indx);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (!trgt)
+        return 0;
+    retn = calloc(1, sizeof(*retn));
+    retn->trgt = trgt;
+    retn->type = type;
+    retn->mode = mode;
+    retn->xdim = xdim;
+    retn->ydim = ydim;
+    retn->zdim = zdim;
+    glGenTextures(1, &retn->indx);
+    glBindTexture(retn->trgt, retn->indx);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-        if (retn->trgt != GL_TEXTURE_CUBE_MAP)
-            iend = iter = retn->trgt;
-        else {
-            iend = 6 + (iter = GL_TEXTURE_CUBE_MAP_POSITIVE_X);
-            glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_R, wrap);
-        }
-        if ((retn->trgt != GL_TEXTURE_3D)
-        &&  (retn->trgt != GL_TEXTURE_2D_ARRAY))
-            for (; iter <= iend; iter++)
-                glTexImage2D(iter, 0, frmt, retn->xdim, retn->ydim,
-                             0, retn->mode, retn->type, data);
-        else {
-            glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_R, wrap);
-            glTexImage3D(retn->trgt, 0, frmt, retn->xdim, retn->ydim,
-                         retn->zdim, 0, retn->mode, retn->type, data);
-        }
-        iter = glGetError();
+    if (retn->trgt != GL_TEXTURE_CUBE_MAP)
+        iend = iter = retn->trgt;
+    else {
+        iend = 6 + (iter = GL_TEXTURE_CUBE_MAP_POSITIVE_X);
+        glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_R, wrap);
+    }
+    while (glGetError() != GL_NO_ERROR);
+    if ((retn->trgt != GL_TEXTURE_3D)
+    &&  (retn->trgt != GL_TEXTURE_2D_ARRAY))
+        for (; iter <= iend; iter++)
+            glTexImage2D(iter, 0, frmt, retn->xdim, retn->ydim,
+                         0, retn->mode, retn->type, data);
+    else {
+        glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_R, wrap);
+        glTexImage3D(retn->trgt, 0, frmt, retn->xdim, retn->ydim,
+                     retn->zdim, 0, retn->mode, retn->type, data);
+    }
+    if (glGetError() != GL_NO_ERROR)
+        OGL_FreeTex((OGL_FTEX**)&retn);
+    else {
         glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_S, wrap);
         glTexParameteri(retn->trgt, GL_TEXTURE_WRAP_T, wrap);
         glTexParameteri(retn->trgt, GL_TEXTURE_MAG_FILTER, tmag);
@@ -482,29 +558,34 @@ static GLuint OGL_MakeTex(OGL_FTEX *retn,
         ||  (tmin == GL_LINEAR_MIPMAP_NEAREST)
         ||  (tmin == GL_LINEAR_MIPMAP_LINEAR))
             glGenerateMipmap(retn->trgt);
-        glBindTexture(retn->trgt, 0);
     }
-    return iter;
+    glBindTexture(trgt, 0);
+    return (OGL_FTEX*)retn;
 }
 
 
 
 __attribute__((unused))
-static GLenum OGL_LoadTex(OGL_FTEX *retn,
+static GLenum OGL_LoadTex(OGL_FTEX *ftex,
                           GLint  xpos, GLint  ypos, GLint  zpos,
                           GLuint xdim, GLuint ydim, GLuint zdim,
                           GLvoid   *data) {
+    typedef _OGL_FTEX __OGL_FTEX;
+
+    __OGL_FTEX *retn = (__OGL_FTEX*)ftex;
+
     glBindTexture(retn->trgt, retn->indx);
+    while (glGetError() != GL_NO_ERROR);
     switch (retn->trgt) {
         case GL_TEXTURE_2D:
-            glTexSubImage2D(retn->trgt, 0, xpos, ypos, xdim, ydim,
-                            retn->mode, retn->type, data);
+            glTexSubImage2D(retn->trgt, 0, xpos, ypos,
+                            xdim, ydim, retn->mode, retn->type, data);
             break;
 
         case GL_TEXTURE_3D:
         case GL_TEXTURE_2D_ARRAY:
-            glTexSubImage3D(retn->trgt, 0, xpos, ypos, zpos, xdim, ydim, zdim,
-                            retn->mode, retn->type, data);
+            glTexSubImage3D(retn->trgt, 0, xpos, ypos, zpos,
+                            xdim, ydim, zdim, retn->mode, retn->type, data);
             break;
     }
     return glGetError();
@@ -512,50 +593,51 @@ static GLenum OGL_LoadTex(OGL_FTEX *retn,
 
 
 
-#define OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, shdr, ...) \
-       _OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, shdr,      \
-                    ##__VA_ARGS__, (void*)0)
+#define OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, cshd, pshd, ...) \
+       _OGL_MakeVBO(ctex, elem, catr, patr, cuni, puni, cshd, pshd,      \
+                    ##__VA_ARGS__, (GLchar*)0)
 __attribute__((unused))
 static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                               GLuint catr, OGL_UNIF *patr,
                               GLuint cuni, OGL_UNIF *puni,
-                              GLchar *tmpl[], ...) {
+                              GLuint cshd, GLchar *pshd[], ...) {
     GLint iter, indx, ctmp, step;
     GLchar **shdr, *curv, *curp;
-    OGL_FVBO *retn;
+    _OGL_FVBO *retn;
     va_list list;
 
     retn = calloc(1, sizeof(*retn));
-    if (tmpl) {
-        for (; tmpl[retn->cshd]; retn->cshd++);
-        shdr = calloc(retn->cshd + 1, sizeof(*tmpl));
-        for (iter = 0; iter < retn->cshd; iter++)
-            if (tmpl[iter] == (GLchar*)-1)
-                shdr[iter] = tmpl[iter];
+    if (pshd && cshd && (~cshd & 1)) {
+        shdr = calloc(cshd, sizeof(*pshd));
+        for (iter = 0; iter < cshd; iter++)
+            if (pshd[iter] == (GLchar*)-1)
+                shdr[iter] = pshd[iter];
             else {
-                indx = strlen(tmpl[iter]);
-                va_start(list, tmpl);
-                while ((curv = va_arg(list, GLchar*)))
-                    indx += strlen(curv);
+                indx = strlen(pshd[iter]);
+                va_start(list, pshd);
+                while ((curp = va_arg(list, GLchar*)))
+                    indx += strlen(curp);
                 va_end(list);
-                curv = calloc(sizeof(*curv), indx + 1);
-                va_start(list, tmpl);
-                vsnprintf(curv, indx + 1, tmpl[iter], list);
-                shdr[iter] = curv;
+                curp = calloc(sizeof(*curp), indx + 2);
+                va_start(list, pshd);
+                vsnprintf(curp, indx + 1, pshd[iter], list);
+                shdr[iter] = curp;
                 va_end(list);
             }
         curv = curp = 0;
-        retn->pshd = calloc(retn->cshd >>= 1, sizeof(*retn->pshd));
+        retn->pshd = calloc(retn->cshd = cshd >> 1, sizeof(*retn->pshd));
         for (iter = 0; iter < retn->cshd; iter++) {
             if (shdr[iter * 2 + 0] != (GLchar*)-1)
                 curv = shdr[iter * 2 + 0];
             if (shdr[iter * 2 + 1] != (GLchar*)-1)
                 curp = shdr[iter * 2 + 1];
             retn->pshd[iter].prog = glCreateProgram();
-            if (_OGL_ShdrAdd(curp, retn->pshd[iter].prog, GL_FRAGMENT_SHADER)
-            &&  _OGL_ShdrAdd(curv, retn->pshd[iter].prog, GL_VERTEX_SHADER)) {
+            if (_OGL_MakeShader(curp, retn->pshd[iter].prog,
+                                GL_FRAGMENT_SHADER)
+            &&  _OGL_MakeShader(curv, retn->pshd[iter].prog,
+                                GL_VERTEX_SHADER)) {
                 glLinkProgram(retn->pshd[iter].prog);
-                if (_OGL_ShdrStatus(retn->pshd[iter].prog, GL_FALSE,
+                if (_OGL_EnumShader(retn->pshd[iter].prog, GL_FALSE,
                                     GL_LINK_STATUS) == GL_TRUE) {
                     glUseProgram(retn->pshd[iter].prog);
                     retn->pshd[iter].cuni = 0;
@@ -566,8 +648,8 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                             retn->pshd[iter].cuni++;
                     }
                     retn->pshd[iter].puni =
-                        (cuni)? malloc(retn->pshd[iter].cuni
-                                     * sizeof(*retn->pshd[iter].puni)) : 0;
+                        (cuni)? calloc(retn->pshd[iter].cuni,
+                                       sizeof(*retn->pshd[iter].puni)) : 0;
                     for (step = ctmp = 0; ctmp < cuni; ctmp++) {
                         indx = glGetUniformLocation(retn->pshd[iter].prog,
                                                     puni[ctmp].name);
@@ -581,9 +663,11 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                 }
             }
             /** Only executed if it`s impossible to build the shader **/
+            glUseProgram(0);
             glDeleteProgram(retn->pshd[iter].prog);
+            retn->pshd[iter].prog = 0;
         }
-        for (iter = 0; shdr[iter]; iter++)
+        for (iter = 0; iter < cshd; iter++)
             if (shdr[iter] != (GLchar*)-1)
                 free(shdr[iter]);
         free(shdr);
@@ -608,6 +692,8 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
                      patr[iter].cdat, patr[iter].pdat, patr[iter].draw);
     }
     for (indx = 0; indx < retn->cshd; indx++) {
+        if (!retn->pshd[indx].prog)
+            continue;
         glUseProgram(retn->pshd[indx].prog);
         for (iter = 1; iter < catr; iter++) {
             retn->patr[iter].aloc =
@@ -636,18 +722,20 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
     }
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    return retn;
-    #undef _OGL_MakeShdr
+    return (OGL_FVBO*)retn;
 }
 
 
 
 __attribute__((unused))
-static GLvoid OGL_DrawVBO(OGL_FVBO *vobj, GLuint shad) {
-    GLenum iter;
-    OGL_UNIF *unif;
+static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad) {
+    typedef _OGL_FVBO __OGL_FVBO;
 
-    if (shad < vobj->cshd) {
+    __OGL_FVBO *vobj = (__OGL_FVBO*)draw;
+    OGL_UNIF *unif;
+    GLenum iter;
+
+    if ((shad < vobj->cshd) && vobj->pshd[shad].prog) {
         glUseProgram(vobj->pshd[shad].prog);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vobj->pbuf[0]);
@@ -660,7 +748,7 @@ static GLvoid OGL_DrawVBO(OGL_FVBO *vobj, GLuint shad) {
             glEnableVertexAttribArray(vobj->patr[iter].aloc);
         }
         for (iter = 0; iter < vobj->ctex; iter++)
-            OGL_BindTex(vobj, iter, OGL_TEX_DFLT);
+            OGL_BindTex((OGL_FVBO*)vobj, iter, OGL_TEX_DFLT);
 
         for (iter = 0; iter < vobj->pshd[shad].cuni; iter++)
             switch ((unif = &vobj->pshd[shad].puni[iter])->type
@@ -727,26 +815,33 @@ static GLvoid OGL_DrawVBO(OGL_FVBO *vobj, GLuint shad) {
 
 
 __attribute__((unused))
-static GLvoid OGL_FreeVBO(OGL_FVBO **vobj) {
+static GLvoid OGL_FreeVBO(OGL_FVBO **retn) {
+    typedef _OGL_FVBO __OGL_FVBO;
+
+    __OGL_FVBO **vobj = (__OGL_FVBO**)retn;
+
     if (vobj && *vobj) {
-        while ((*vobj)->cshd) {
-            glDeleteProgram((*vobj)->pshd[--(*vobj)->cshd].prog);
-            free((*vobj)->pshd[(*vobj)->cshd].puni);
-        }
+        while ((*vobj)->cshd)
+            if ((*vobj)->pshd[--(*vobj)->cshd].prog) {
+                glDeleteProgram((*vobj)->pshd[(*vobj)->cshd].prog);
+                free((*vobj)->pshd[(*vobj)->cshd].puni);
+            }
         glDeleteBuffers((*vobj)->catr, (*vobj)->pbuf);
         free((*vobj)->pbuf);
         free((*vobj)->patr);
         free((*vobj)->pshd);
         if ((*vobj)->ctex) {
             while ((*vobj)->ctex)
-                if (!(*vobj)->ptex[--(*vobj)->ctex].orig)
-                    glDeleteTextures(1, &(*vobj)->ptex[(*vobj)->ctex].indx);
+                OGL_FreeTex((OGL_FTEX**)&(*vobj)->ptex[--(*vobj)->ctex]);
             free((*vobj)->ptex);
         }
         free(*vobj);
         *vobj = 0;
     }
 }
+
+#undef _OGL_FVBO
+#undef _OGL_FTEX
 
 #ifdef __cplusplus
 }
