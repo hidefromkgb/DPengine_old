@@ -1,14 +1,15 @@
 # gif_load
 This is a public domain, single-header and single-call, ANSI C compatible
-(builds fine with `-pedantic -ansi` compiler flags, but includes `stdint.h`
-unavailable prior to C99) loader for animated GIFs.
+loader for animated GIFs. 'ANSI C compatible' means that it builds fine with
+`-pedantic -ansi` compiler flags, but includes `stdint.h` unavailable prior
+to C99.
 
 There are no strict dependencies on the standard C library. The only external
 function used by default is `realloc()` (both for freeing and allocation), but
 it\`s possible to override it by defining a macro called `GIF_MGET(m, s, c)`
-prior to including the header; `m` stands for a `uint8_t` typed pointer to the
-memory block being allocated or freed, `s` is the target block size, and `c`
-equals 0 on freeing and 1 on allocation.
+prior to including the header; `m` stands for a `uint8_t`-typed pointer to the
+memory block being allocated or freed, `s` is the target block size, typed
+`unsigned long`, and `c` equals 0 on freeing and 1 on allocation.
 
 Loading GIFs immediately from disk is not supported: target files must be read
 or otherwise mapped into RAM by the caller.
@@ -22,49 +23,73 @@ Aditionally, it accepts a second callback used to process GIF
 application-specific extensions, i.e. metadata; in the vast majority of
 GIFs no such extensions are present, so this callback is optional.
 
-The metadata callback needs 2 parameters:
+Both frame writer callback and metadata callback need 2 parameters:
 
-1. GIF application-specific extension header; after it comes the metadata
-   itself, wrapped in a GIF chunk (1 byte designating length L, then L bytes
-   of data, and so forth; L = 0 means end of chunk)
-2. callback-specific data
-
-The frame writer callback needs 11 parameters:
-
-1. GIF animation global header
-2. header of the resulting frame (the one just decoded)
-3. may take different values depending on the frame background mode
-  * 0: no background needed (used in single-frame GIFs / first frames)
-  * 1: background is a previous frame
-  * 2: background is a frame before previous
-  * [actual GIF_FHDR]: previous frame with a "hole" filled with the
-                       color of GIF_GHDR::bkgd in this GIF_FHDR`s bounds
-
-4. palette associated with the current (resulting) frame
-5. number of colors in the palette
-6. decoded array of color indices
-7. callback-specific data
-8. total frame count (may be partial; in this case it\`s negative)
-9. transparent color index (or -1 if there\`s none)
-10. next frame delay, in GIF time units (1 unit = 10 ms); can be 0
-11. 0-based index of the resulting frame
+1. callback-specific data
+2. pointer to a `GIF_WHDR` structure that encapsulates GIF frame information
+(callbacks may alter any fields at will, as the structure passed to them is a
+proxy that is discarded after every call):
+  * `GIF_WHDR::xdim` - global GIF width, [0; 65535]
+  * `GIF_WHDR::ydim` - global GIF height, [0; 65535]
+  * `GIF_WHDR::clrs` - number of colors in the current palette (often the same
+                       for all frames), {2; 4; 8; 16; 32; 64; 128; 256}
+  * `GIF_WHDR::bkgd` - 0-based background color index for the current palette
+  * `GIF_WHDR::tran` - 0-based transparent color index for the current palette
+                       (or -1 when transparency is disabled)
+  * `GIF_WHDR::intr` - boolean flag indicating whether the current frame is
+                       interlaced; deinterlacing it is up to the caller (see
+                       the example below)
+  * `GIF_WHDR::mode` - next frame (SIC next, not current) blending mode:
+                       [`GIF_NONE`:] no blending, mainly used in single-frame
+                       GIFs; [`GIF_CURR`:] leave the current frame as is;
+                       [`GIF_BKGD`:] restore the background color in the
+                       boundaries of the current frame; [`GIF_PREV`:] restore
+                       the frame that was replaced by the current one
+  * `GIF_WHDR::frxd` - current frame width, [0; 65535]
+  * `GIF_WHDR::fryd` - current frame height, [0; 65535]
+  * `GIF_WHDR::frxo` - current frame horizontal offset, [0; 65535]
+  * `GIF_WHDR::fryo` - current frame vertical offset, [0; 65535]
+  * `GIF_WHDR::time` - next frame delay in GIF time units (1 unit = 10 msec),
+                       [0; 65535]
+  * `GIF_WHDR::ifrm` - 0-based index of the current frame
+  * `GIF_WHDR::nfrm` - total frame count, negative if the GIF data supplied
+                       is incomplete
+  * `GIF_WHDR::bptr` - [frame writer:] pixel indices for the current frame;
+                       [metadata callback:] app metadata header (8+3 bytes)
+                       followed by a GIF chunk (1 byte designating length L,
+                       then L bytes of metadata, and so forth; L = 0 means
+                       end of chunk)
+  * `GIF_WHDR::cpal` - the current palette; contains `GIF_RGBX` values (`R`
+                       for the red channel, `G` for green and `B` for blue,
+                       all three values are `uint8_t`).
 
 `GIF_Load()`, in its turn, needs 6:
 
 1. a pointer to GIF data in RAM
 2. GIF data size; may be larger than the actual data if the GIF has a proper
    ending mark
-3. number of frames to skip before executing the callback; useful to resume
+3. a pointer to the frame writer callback
+4. a pointer to the metadata callback; may be left empty
+5. callback-specific data
+6. number of frames to skip before executing the callback; useful to resume
    loading the partial file
-4. a pointer to the frame writer callback
-5. a pointer to the metadata callback; may be left empty
-6. callback-specific data
 
-The library supports partial GIFs, but only at a frame-by-frame granularity.
-For example, if the file ends in the middle of the fifth frame, no attempt
-would be made to recover the upper half, and the resulting animation will
-only contain 4 frames. When more data is available, the loader might be called
-again, this time with skip parameter equalling 4 to skip these 4 frames.
+Partial GIFs are also supported, but only at a granularity of one frame. For
+example, if the file ends in the middle of the fifth frame, no attempt would
+be made to recover the upper half, and the resulting animation will only
+contain 4 frames. When more data is available, the loader might be called
+again, this time with the `skip` parameter equalling 4 to skip those 4 frames.
+Note that the metadata callback is not affected by `skip`, and gets called
+again every time the frames between which it was written are skipped.
+
+`gif_load` is endian-aware. To check if the target machine is big-endian,
+refer to the `GIF_BIGE` compile-time boolean macro. Although GIF data is
+little-endian, all multibyte integers passed to the user through `long`-typed
+fields of `GIF_WHDR` have correct byte order regardless of the endianness of
+the target machine. Most other data, e.g. pixel indices of a frame, consists
+of single bytes and does not require swapping. One notable exception is GIF
+application metadata which is passed as the raw chunk of bytes, and then it\`s
+the caller\`s job to parse it and decide whether to decode and how to do that.
 
 
 
@@ -74,13 +99,14 @@ GIF file into a 32-bit uncompressed TGA:
 
 ```c
 #include "gif_load.h"
-#include <unistd.h>
 #include <fcntl.h>
-
-void Frame(GIF_GHDR *ghdr, GIF_FHDR *curr, GIF_FHDR *prev, GIF_RGBX *cpal,
-           long clrs, uint8_t *bptr, void *data, long nfrm, long tran,
-           long time, long indx);
-
+#ifdef _MSC_VER
+    /** MSVC is definitely not my favourite compiler...   >_<   **/
+    #pragma warning(disable:4996)
+    #include <io.h>
+#else
+    #include <unistd.h>
+#endif
 #ifndef _WIN32
     #define O_BINARY 0
 #endif
@@ -88,58 +114,56 @@ void Frame(GIF_GHDR *ghdr, GIF_FHDR *curr, GIF_FHDR *prev, GIF_RGBX *cpal,
 #pragma pack(push, 1)
 typedef struct {
     void *data, *draw;
-    size_t size;
+    unsigned long size;
     int uuid;
-} STAT;
+} STAT; /** #pragma avoids -Wpadded on 64-bit machines **/
 #pragma pack(pop)
 
-void Frame(GIF_GHDR *ghdr, GIF_FHDR *curr, GIF_FHDR *prev, GIF_RGBX *cpal,
-           long clrs, uint8_t *bptr, void *data, long nfrm, long tran,
-           long time, long indx) {
+void Frame(void*, GIF_WHDR*); /** keeps -Wmissing-prototypes happy **/
+void Frame(void *data, GIF_WHDR *whdr) {
     uint32_t *pict, x, y, yoff, iter, ifin, dsrc, ddst;
     uint8_t head[18] = {0};
     STAT *stat = (STAT*)data;
-    (void)clrs; (void)time;
-    #define BGRA(i) ((cpal[bptr[i]].G << 8) | (cpal[bptr[i]].R << 16) \
-                    | cpal[bptr[i]].B | (((bptr[i] - tran)? 255 : 0) << 24))
-    if (!indx) {
+
+    #define BGRA(i) \
+        ((uint32_t)(whdr->cpal[whdr->bptr[i]].R << ((GIF_BIGE)? 8 : 16)) | \
+         (uint32_t)(whdr->cpal[whdr->bptr[i]].G << ((GIF_BIGE)? 16 : 8)) | \
+         (uint32_t)(whdr->cpal[whdr->bptr[i]].B << ((GIF_BIGE)? 24 : 0)) | \
+        ((whdr->bptr[i] != whdr->tran)? (GIF_BIGE)? 0xFF : 0xFF000000 : 0))
+    if (!whdr->ifrm) {
         /** TGA doesn`t support heights over 0xFFFF, so we have to trim: **/
-        nfrm = labs(nfrm) * ghdr->ydim;
-        nfrm = (nfrm < 0xFFFF)? nfrm : 0xFFFF;
+        whdr->nfrm = ((whdr->nfrm < 0)? -whdr->nfrm : whdr->nfrm) * whdr->ydim;
+        whdr->nfrm = (whdr->nfrm < 0xFFFF)? whdr->nfrm : 0xFFFF;
         /** this is the very first frame, so we must write the header **/
         head[ 2] = 2;
-        head[12] = (uint8_t)(ghdr->xdim     );
-        head[13] = (uint8_t)(ghdr->xdim >> 8);
-        head[14] = (uint8_t)(nfrm     );
-        head[15] = (uint8_t)(nfrm >> 8);
+        head[12] = (uint8_t)(whdr->xdim     );
+        head[13] = (uint8_t)(whdr->xdim >> 8);
+        head[14] = (uint8_t)(whdr->nfrm     );
+        head[15] = (uint8_t)(whdr->nfrm >> 8);
         head[16] = 32;   /** 32 bits depth **/
         head[17] = 0x20; /** top-down flag **/
-        write(stat->uuid, head, (size_t)18);
-        stat->draw = calloc((size_t)ghdr->xdim * ghdr->ydim, sizeof(uint32_t));
-    }
-    /** interlacing support **/
-    iter = (curr->flgs & GIF_FINT)? 0 : 4;
-    ifin = (curr->flgs & GIF_FINT)? 4 : 5;
-
-    pict = (uint32_t*)stat->draw;
-    if ((uintptr_t)prev > (uintptr_t)sizeof(prev)) {
-        /** background: previous frame with a hole **/
-        ddst = (uint32_t)ghdr->xdim * prev->yoff + prev->xoff;
-        for (y = 0; y < prev->ydim; y++)
-            for (x = 0; x < prev->xdim; x++)
-                pict[ghdr->xdim * y + x + ddst] = (uint32_t)BGRA(ghdr->bkgd);
+        write(stat->uuid, head, 18UL);
+        stat->draw = calloc(sizeof(uint32_t),
+                           (unsigned long)(whdr->xdim * whdr->ydim));
     }
     /** [TODO:] the frame is assumed to be inside global bounds,
                 however it might exceed them in some GIFs; fix me. **/
-    ddst = (uint32_t)ghdr->xdim * curr->yoff + curr->xoff;
+    /** [TODO:] add GIF_PREV support; not widely used, but anyway. **/
+    pict = (uint32_t*)stat->draw;
+    ddst = (uint32_t)(whdr->xdim * whdr->fryo + whdr->frxo);
+    ifin = (!(iter = (whdr->intr)? 0 : 4))? 4 : 5; /** interlacing support **/
     for (dsrc = (uint32_t)-1; iter < ifin; iter++)
         for (yoff = 16U >> ((iter > 1)? iter : 1), y = (8 >> iter) & 7;
-             y < curr->ydim; y += yoff)
-            for (x = 0; x < curr->xdim; x++)
-                if (tran != (long)bptr[++dsrc])
-                    pict[ghdr->xdim * y + x + ddst] = (uint32_t)BGRA(dsrc);
-    write(stat->uuid, pict,
-         (size_t)ghdr->xdim * ghdr->ydim * sizeof(uint32_t));
+             y < (uint32_t)whdr->fryd; y += yoff)
+            for (x = 0; x < (uint32_t)whdr->frxd; x++)
+                if (whdr->tran != (long)whdr->bptr[++dsrc])
+                    pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(dsrc);
+    write(stat->uuid, pict, sizeof(uint32_t) * (uint32_t)whdr->xdim
+                                             * (uint32_t)whdr->ydim);
+    if (whdr->mode == GIF_BKGD) /** cutting a hole for the next frame **/
+        for (y = 0; y < (uint32_t)whdr->fryd; y++)
+            for (x = 0; x < (uint32_t)whdr->frxd; x++)
+                pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(whdr->bkgd);
     #undef BGRA
 }
 
@@ -147,18 +171,18 @@ int main(int argc, char *argv[]) {
     STAT stat = {0};
 
     if (argc < 3)
-        write(1, "params: <in>.gif <out>.tga (1 or more times)\n", (size_t)45);
+        write(1, "arguments: <in>.gif <out>.tga (1 or more times)\n", 48UL);
     for (stat.uuid = 2, argc -= (~argc & 1); argc >= 3; argc -= 2) {
         if ((stat.uuid = open(argv[argc - 2], O_RDONLY | O_BINARY)) <= 0)
             return 1;
-        stat.size = (size_t)lseek(stat.uuid, (off_t)0, SEEK_END);
-        lseek(stat.uuid, (off_t)0, SEEK_SET);
+        stat.size = (unsigned long)lseek(stat.uuid, 0UL, 2 /** SEEK_END **/);
+        lseek(stat.uuid, 0UL, 0 /** SEEK_SET **/);
         read(stat.uuid, stat.data = malloc(stat.size), stat.size);
         close(stat.uuid);
         unlink(argv[argc - 1]);
         stat.uuid = open(argv[argc - 1], O_CREAT | O_WRONLY | O_BINARY, 0644);
         if (stat.uuid > 0) {
-            GIF_Load(stat.data, (long)stat.size, 0L, Frame, 0, (void*)&stat);
+            GIF_Load(stat.data, (long)stat.size, Frame, 0, (void*)&stat, 0L);
             free(stat.draw);
             close(stat.uuid);
             stat.uuid = 0;
