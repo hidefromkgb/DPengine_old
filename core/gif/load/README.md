@@ -39,7 +39,7 @@ proxy that is discarded after every call):
                        (or -1 when transparency is disabled)
   * `GIF_WHDR::intr` - boolean flag indicating whether the current frame is
                   [interlaced](https://en.wikipedia.org/wiki/GIF#Interlacing);
-                       deinterlacing it is up to the caller (see the example
+                       deinterlacing it is up to the caller (see the examples
                        below)
   * `GIF_WHDR::mode` - next frame (SIC next, not current) blending mode:
                        [`GIF_NONE`:] no blending, mainly used in single-frame
@@ -75,8 +75,13 @@ proxy that is discarded after every call):
   * `GIF_WHDR::cpal` - the current palette containing 3 `uint8_t` values for
                        each of the colors: `R` for the red channel, `G` for
                        green and `B` for blue; this pointer is guaranteed
-                       to be the same across frames if and only if the same
-                       palette is used for those frames
+                       to be the same across frames if and only if the global
+                       palette is used for those frames (local palettes are
+                       strictly frame-specific, even when they contain the
+                       same number of identical colors in identical order)
+
+Neither of the two callbacks needs to return a value, thus having `void` for
+a return type.
 
 `GIF_Load()`, in its turn, needs 6 parameters:
 
@@ -98,8 +103,19 @@ Note that the metadata callback is not affected by `skip`, and gets called
 again every time the frames between which the metadata was written are
 skipped.
 
-`gif_load` is endian-aware. To check if the target machine is big-endian,
-refer to the `GIF_BIGE` compile-time boolean macro. Although GIF data is
+The return value of the function above, if positive, equals the total number
+of frames in the animation and indicates that the GIF data stream ended with
+a proper termination mark. Negative return value is the number of frames
+loaded per current call multiplied by -1, suggesting that the GIF data stream
+being decoded is still incomplete. Zero, in its turn, means that the call
+could not decode any more frames.
+
+`gif_load` is endian-aware. If the target machine can be big-endian, the user
+has to determine that manually and add `#define GIF_BIGE 1` to the source
+prior to the header being included if that\`s the case, or otherwise define
+the endianness to be used (0 = little, 1 = big), e.g. by declaring a helper
+function and setting `GIF_BIGE` to expand into its call, or by passing it as a
+compiler parameter (e.g. `-DGIF_BIGE=1` for GCC / Clang). Although GIF data is
 little-endian, all multibyte integers passed to the user through `long`-typed
 fields of `GIF_WHDR` have correct byte order regardless of the endianness of
 the target machine. Most other data, e.g. pixel indices of a frame, consists
@@ -124,7 +140,7 @@ GIF file into a 32-bit uncompressed TGA:
 #else
     #include <unistd.h>
 #endif
-#ifndef _WIN32
+#ifndef O_BINARY
     #define O_BINARY 0
 #endif
 
@@ -194,18 +210,93 @@ int main(int argc, char *argv[]) {
             return 1;
         stat.size = (unsigned long)lseek(stat.uuid, 0UL, 2 /** SEEK_END **/);
         lseek(stat.uuid, 0UL, 0 /** SEEK_SET **/);
-        read(stat.uuid, stat.data = malloc(stat.size), stat.size);
+        read(stat.uuid, stat.data = realloc(0, stat.size), stat.size);
         close(stat.uuid);
         unlink(argv[argc - 1]);
         stat.uuid = open(argv[argc - 1], O_CREAT | O_WRONLY | O_BINARY, 0644);
         if (stat.uuid > 0) {
             GIF_Load(stat.data, (long)stat.size, Frame, 0, (void*)&stat, 0L);
-            free(stat.draw);
+            stat.draw = realloc(stat.draw, 0L);
             close(stat.uuid);
             stat.uuid = 0;
         }
-        free(stat.data);
+        stat.data = realloc(stat.data, 0L);
     }
     return stat.uuid;
 }
 ```
+
+And this is an example of how to use `GIF_Load()` from Python. As for now only
+the Linux compilation string is available, but building it on Windows is also
+possible.
+
+First we need to build `gif_load.h` as a shared library:
+
+```bash
+rm gif_load.so 2>/dev/null
+gcc -pedantic -ansi -xc -s <(sed "s:static long GIF_Load:extern long GIF_Load:" gif_load.h) \
+    -o gif_load.so -shared -fPIC -Wl,--version-script=<(echo "{global:GIF_Load;local:*;};")
+```
+
+And now let\`s use it:
+
+```python
+from PIL import Image
+
+def GIF_Load(file):
+    from platform import system
+    from ctypes import string_at, Structure, c_long as cl, c_ubyte, \
+                       py_object, pointer, POINTER as PT, CFUNCTYPE, CDLL
+    class GIF_WHDR(Structure): _fields_ = \
+       [("xdim", cl), ("ydim", cl), ("clrs", cl), ("bkgd", cl),
+        ("tran", cl), ("intr", cl), ("mode", cl), ("frxd", cl), ("fryd", cl),
+        ("frxo", cl), ("fryo", cl), ("time", cl), ("ifrm", cl), ("nfrm", cl),
+        ("bptr", PT(c_ubyte)), ("cpal", PT(c_ubyte))]
+    def intr(y, x, w, base, tran): base.paste(tran.crop((0, y, x, y + 1)), w)
+    def skew(i, r): return r >> ((7 - (i & 2)) >> (1 + (i & 1)))
+    def WriteFunc(d, w):
+        cpal = string_at(w[0].cpal, w[0].clrs * 3)
+        list = d.contents.value
+        if (len(list) == 0):
+            list.append(Image.new("RGBA", (w[0].xdim, w[0].ydim)))
+        tail = len(list) - 1
+        base = Image.frombytes("L", (w[0].frxd, w[0].fryd),
+                               string_at(w[0].bptr, w[0].frxd * w[0].fryd))
+        if (w[0].intr != 0):
+            tran = base.copy()
+            [intr(skew(y, y) + (skew(y, w[0].fryd - 1) + 1, 0)[(y & 7) == 0],
+                  w[0].frxd, (0, y), base, tran) for y in range(w[0].fryd)]
+        tran = Image.eval(base, lambda indx: (255, 0)[indx == w[0].tran])
+        base.putpalette(cpal)
+        list[tail].paste(base, (w[0].frxo, w[0].fryo), tran)
+        list[tail].info = {"delay" : w[0].time}
+        if (w[0].ifrm != (w[0].nfrm - 1)):
+            list.append(list[max(0, tail - int(w[0].mode == 3))].copy())
+            if (w[0].mode == 2):
+                base = Image.new("L", (w[0].frxd, w[0].fryd), w[0].bkgd)
+                base.putpalette(cpal)
+                list[tail + 1].paste(base, (w[0].frxo, w[0].fryo))
+    try: file = open(file, "rb")
+    except IOError: return []
+    file.seek(0, 2)
+    size = file.tell()
+    file.seek(0, 0)
+    list = []
+    CDLL(("%s.so", "%s.dll")[system() == "Windows"] % "./gif_load"). \
+    GIF_Load(file.read(), size,
+             CFUNCTYPE(None, PT(py_object), PT(GIF_WHDR))(WriteFunc),
+             None, pointer(py_object(list)), 0)
+    file.close()
+    return list
+
+def GIF_Save(file, fext):
+    list = GIF_Load("%s.gif" % file)
+    [pict.save("%s_f%d.%s" % (file, indx, fext))
+     for (indx, pict) in enumerate(list)]
+
+GIF_Save("insert_gif_name_here_without_extension", "png")
+```
+
+The implementation shown here complies to the GIF standard much better than
+the one PIL has (as of 2018-02-07): for example, it preserves transparency
+and supports local frame palettes.
