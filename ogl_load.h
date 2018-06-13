@@ -54,6 +54,7 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
+    #define vsnprintf _vsnprintf
     typedef char GLchar;
     #include <GL/gl.h>
     #include <windows.h>
@@ -681,11 +682,11 @@ static OGL_FVBO *_OGL_MakeVBO(GLuint ctex, GLenum elem,
     glGenBuffers(catr, retn->pbuf = calloc(catr, sizeof(*retn->pbuf)));
     retn->patr = calloc(catr, sizeof(*retn->patr));
 
-    retn->cind = patr[0].cdat / sizeof(GLuint);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, retn->pbuf[0]);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 patr[0].cdat, patr[0].pdat, patr[0].draw);
-
+    if ((retn->cind = patr[0].cdat / sizeof(GLuint))) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, retn->pbuf[0]);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     patr[0].cdat, patr[0].pdat, patr[0].draw);
+    }
     for (iter = 1; iter < catr; iter++) {
         glBindBuffer(GL_ARRAY_BUFFER, retn->pbuf[iter]);
         glBufferData(GL_ARRAY_BUFFER,
@@ -738,7 +739,8 @@ static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad, GLuint cind) {
     if ((shad < vobj->cshd) && vobj->pshd[shad].prog) {
         glUseProgram(vobj->pshd[shad].prog);
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vobj->pbuf[0]);
+        if (vobj->cind)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vobj->pbuf[0]);
         for (iter = 1; iter < vobj->catr; iter++) {
             if (vobj->patr[iter].aloc == -1)
                 continue;
@@ -802,8 +804,12 @@ static GLvoid OGL_DrawVBO(OGL_FVBO *draw, GLuint shad, GLuint cind) {
 
                 default: continue;
             }
-        cind = (cind && (cind < vobj->cind))? cind : vobj->cind;
-        glDrawElements(vobj->elem, cind, GL_UNSIGNED_INT, 0);
+        cind = (cind && (!vobj->cind || (cind < vobj->cind)))?
+                cind : vobj->cind;
+        if (vobj->cind)
+            glDrawElements(vobj->elem, cind, GL_UNSIGNED_INT, 0);
+        else
+            glDrawArrays(vobj->elem, 0, cind);
         for (iter = 1; iter < vobj->catr; iter++)
             if (vobj->patr[iter].aloc != -1)
                 glDisableVertexAttribArray(vobj->patr[iter].aloc);
