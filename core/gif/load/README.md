@@ -62,7 +62,8 @@ proxy that is discarded after every call):
                        [`GIF_NONE`:] no blending, mainly used in single-frame
                        GIFs, functionally equivalent to `GIF_CURR`;
                        [`GIF_CURR`:] leave the current image state as is;
-                       [`GIF_BKGD`:] restore the background color in the
+                       [`GIF_BKGD`:] restore the background color (or
+                       transparency, in case `GIF_WHDR::tran` ≠ −1) in the
                        boundaries of the current frame; [`GIF_PREV`:] restore
                        the image state that used to be before it was blended
                        with the current frame; *N.B.:* if right before a
@@ -86,12 +87,14 @@ proxy that is discarded after every call):
                        across frames (further referred to as 'AVAF')
   * `GIF_WHDR::nfrm` - total frame count, negative if the GIF data supplied
                        is incomplete, ACAF during a single `GIF_Load()` call
-                       (but may vary across `GIF_Load()` calls)
+                       but may vary across `GIF_Load()` calls
   * `GIF_WHDR::bptr` - [frame writer:] pixel indices for the current frame,
-                       ACAF; [metadata callback:] app metadata header (8+3
-                       bytes) followed by a GIF chunk (1 byte designating
-                       length L, then L bytes of metadata, and so forth; L = 0
-                       means end of chunk), AVAF
+                       ACAF (it is only the pointer address that is constant;
+                       the pixel indices stored inside = MVAF); [metadata
+                       callback:] app metadata header (8+3 bytes) followed by
+                       a GIF chunk (1 byte designating length L, then L bytes
+                       of metadata, and so forth; L = 0 means end of chunk),
+                       AVAF
   * `GIF_WHDR::cpal` - the current palette containing 3 `uint8_t` values for
                        each of the colors: `R` for the red channel, `G` for
                        green and `B` for blue; this pointer is guaranteed
@@ -146,6 +149,11 @@ metadata which is passed as the raw chunk of bytes (for details see the
 description of `GIF_WHDR::bptr` provided above), and then it\`s the
 callback\`s job to parse it and decide whether to decode and how to do that.
 
+There is a possibility to build `gif_load` as a shared library. `GIF_EXTR` is
+a convenience macro to be defined so that the `GIF_Load()` function gets an
+entry in the export table of the library. See the Python example for further
+information.
+
 
 
 # C / C++ usage example
@@ -182,11 +190,11 @@ void Frame(void *data, GIF_WHDR *whdr) {
     uint8_t head[18] = {0};
     STAT *stat = (STAT*)data;
 
-    #define BGRA(i) \
-        ((uint32_t)(whdr->cpal[whdr->bptr[i]].R << ((GIF_BIGE)? 8 : 16)) | \
-         (uint32_t)(whdr->cpal[whdr->bptr[i]].G << ((GIF_BIGE)? 16 : 8)) | \
-         (uint32_t)(whdr->cpal[whdr->bptr[i]].B << ((GIF_BIGE)? 24 : 0)) | \
-        ((whdr->bptr[i] != whdr->tran)? (GIF_BIGE)? 0xFF : 0xFF000000 : 0))
+    #define BGRA(i) ((whdr->bptr[i] == whdr->tran)? 0 : \
+          ((uint32_t)(whdr->cpal[whdr->bptr[i]].R << ((GIF_BIGE)? 8 : 16)) \
+         | (uint32_t)(whdr->cpal[whdr->bptr[i]].G << ((GIF_BIGE)? 16 : 8)) \
+         | (uint32_t)(whdr->cpal[whdr->bptr[i]].B << ((GIF_BIGE)? 24 : 0)) \
+         | ((GIF_BIGE)? 0xFF : 0xFF000000)))
     if (!whdr->ifrm) {
         /** TGA doesn`t support heights over 0xFFFF, so we have to trim: **/
         whdr->nfrm = ((whdr->nfrm < 0)? -whdr->nfrm : whdr->nfrm) * whdr->ydim;
@@ -218,9 +226,10 @@ void Frame(void *data, GIF_WHDR *whdr) {
     write(stat->uuid, pict, sizeof(uint32_t) * (uint32_t)whdr->xdim
                                              * (uint32_t)whdr->ydim);
     if (whdr->mode == GIF_BKGD) /** cutting a hole for the next frame **/
-        for (y = 0; y < (uint32_t)whdr->fryd; y++)
+        for (whdr->bptr[0] = (whdr->tran >= 0)? whdr->tran : whdr->bkgd,
+             y = 0; y < (uint32_t)whdr->fryd; y++)
             for (x = 0; x < (uint32_t)whdr->frxd; x++)
-                pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(whdr->bkgd);
+                pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(0);
     #undef BGRA
 }
 
@@ -263,16 +272,18 @@ First of all, `gif_load.h` has to be built as a shared library:
 
 Linux / macOS:
 ```bash
-# only works when executed from the directory where gif_load.h resides
+# Only works when executed from the directory where gif_load.h resides
 rm gif_load.so 2>/dev/null
 uname -s | grep -q ^Darwin && CC=clang || CC=gcc
-$CC -pedantic -ansi -xc -s <(sed "s:static long GIF_Load:extern long GIF_Load:" gif_load.h) \
-    -o gif_load.so -shared -fPIC -Wl,--version-script=<(echo "{global:GIF_Load;local:*;};")
+$CC -pedantic -ansi -s -DGIF_EXTR=extern -xc gif_load.h -o gif_load.so \
+    -shared -fPIC -Wl,--version-script=<(echo "{global:GIF_Load;local:*;};")
 ```
 
 Windows:
 ```bash
-# yet to be created, pull requests welcome
+rem Only works when executed from the directory where gif_load.h resides
+del gif_load.exp gif_load.lib gif_load.dll
+cl /LD /Zl /DGIF_EXTR=__declspec(dllexport) /Tc gif_load.h msvcrt.lib /Fegif_load.dll
 ```
 
 Then the loading function can be called using CTypes
@@ -312,8 +323,11 @@ def GIF_Load(file):
         if (w[0].ifrm != (w[0].nfrm - 1)):
             list.append(list[max(0, tail - int(w[0].mode == 3))].copy())
             if (w[0].mode == 2):
-                base = Image.new("L", (w[0].frxd, w[0].fryd), w[0].bkgd)
-                base.putpalette(cpal)
+                if (w[0].tran >= 0):
+                    base = Image.new("RGBA", (w[0].frxd, w[0].fryd))
+                else:
+                    base = Image.new("L", (w[0].frxd, w[0].fryd), w[0].bkgd)
+                    base.putpalette(cpal)
                 list[tail + 1].paste(base, (w[0].frxo, w[0].fryo))
     try: file = open(file, "rb")
     except IOError: return []
