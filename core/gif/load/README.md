@@ -65,8 +65,9 @@ proxy that is discarded after every call):
                        [`GIF_BKGD`:] restore the background color (or
                        transparency, in case `GIF_WHDR::tran` ≠ −1) in the
                        boundaries of the current frame; [`GIF_PREV`:] restore
-                       the image state that used to be before it was blended
-                       with the current frame; *N.B.:* if right before a
+                       the last image whose mode differed from this one,
+                       functionally equivalent to `GIF_BKGD` when assigned to
+                       the first frame in a GIF; *N.B.:* if right before a
                        `GIF_PREV` frame came a `GIF_BKGD` one, the state to
                        be restored is before a certain part of the resulting
                        image was filled with the background color, not after!
@@ -178,15 +179,15 @@ them if the resulting height exceeds the TGA height limit which is 0xFFFF.
 
 #pragma pack(push, 1)
 typedef struct {
-    void *data, *draw;
-    unsigned long size;
+    void *data, *pict, *prev;
+    unsigned long size, last;
     int uuid;
 } STAT; /** #pragma avoids -Wpadded on 64-bit machines **/
 #pragma pack(pop)
 
 void Frame(void*, GIF_WHDR*); /** keeps -Wmissing-prototypes happy **/
 void Frame(void *data, GIF_WHDR *whdr) {
-    uint32_t *pict, x, y, yoff, iter, ifin, dsrc, ddst;
+    uint32_t *pict, *prev, x, y, yoff, iter, ifin, dsrc, ddst;
     uint8_t head[18] = {0};
     STAT *stat = (STAT*)data;
 
@@ -208,13 +209,13 @@ void Frame(void *data, GIF_WHDR *whdr) {
         head[16] = 32;   /** 32 bits depth **/
         head[17] = 0x20; /** top-down flag **/
         write(stat->uuid, head, 18UL);
-        stat->draw = calloc(sizeof(uint32_t),
-                           (unsigned long)(whdr->xdim * whdr->ydim));
+        ddst = whdr->xdim * whdr->ydim;
+        stat->pict = calloc(sizeof(uint32_t), ddst);
+        stat->prev = calloc(sizeof(uint32_t), ddst);
     }
     /** [TODO:] the frame is assumed to be inside global bounds,
                 however it might exceed them in some GIFs; fix me. **/
-    /** [TODO:] add GIF_PREV support; not widely used, but anyway. **/
-    pict = (uint32_t*)stat->draw;
+    pict = (uint32_t*)stat->pict;
     ddst = (uint32_t)(whdr->xdim * whdr->fryo + whdr->frxo);
     ifin = (!(iter = (whdr->intr)? 0 : 4))? 4 : 5; /** interlacing support **/
     for (dsrc = (uint32_t)-1; iter < ifin; iter++)
@@ -225,9 +226,21 @@ void Frame(void *data, GIF_WHDR *whdr) {
                     pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(dsrc);
     write(stat->uuid, pict, sizeof(uint32_t) * (uint32_t)whdr->xdim
                                              * (uint32_t)whdr->ydim);
+    if ((whdr->mode == GIF_PREV) && !stat->last) {
+        whdr->frxd = whdr->xdim;
+        whdr->fryd = whdr->ydim;
+        whdr->mode = GIF_BKGD;
+        ddst = 0;
+    }
+    else {
+        stat->last = (whdr->mode == GIF_PREV)? stat->last : (whdr->ifrm + 1);
+        pict = (uint32_t*)((whdr->mode == GIF_PREV)? stat->pict : stat->prev);
+        prev = (uint32_t*)((whdr->mode == GIF_PREV)? stat->prev : stat->pict);
+        for (x = whdr->xdim * whdr->ydim; --x; pict[x - 1] = prev[x - 1]);
+    }
     if (whdr->mode == GIF_BKGD) /** cutting a hole for the next frame **/
-        for (whdr->bptr[0] = (whdr->tran >= 0)? whdr->tran : whdr->bkgd,
-             y = 0; y < (uint32_t)whdr->fryd; y++)
+        for (whdr->bptr[0] = (whdr->tran >= 0)? whdr->tran : whdr->bkgd, y = 0,
+             pict = (uint32_t*)stat->pict; y < (uint32_t)whdr->fryd; y++)
             for (x = 0; x < (uint32_t)whdr->frxd; x++)
                 pict[(uint32_t)whdr->xdim * y + x + ddst] = BGRA(0);
     #undef BGRA
@@ -249,7 +262,8 @@ int main(int argc, char *argv[]) {
         stat.uuid = open(argv[argc - 1], O_CREAT | O_WRONLY | O_BINARY, 0644);
         if (stat.uuid > 0) {
             GIF_Load(stat.data, (long)stat.size, Frame, 0, (void*)&stat, 0L);
-            stat.draw = realloc(stat.draw, 0L);
+            stat.pict = realloc(stat.pict, 0L);
+            stat.prev = realloc(stat.prev, 0L);
             close(stat.uuid);
             stat.uuid = 0;
         }
@@ -304,9 +318,15 @@ def GIF_Load(file):
         ("bptr", PT(c_ubyte)), ("cpal", PT(c_ubyte))]
     def intr(y, x, w, base, tran): base.paste(tran.crop((0, y, x, y + 1)), w)
     def skew(i, r): return r >> ((7 - (i & 2)) >> (1 + (i & 1)))
+    def fill(w, d, p):
+        retn = Image.new("L", d, w.bkgd) if (w.tran < 0) else \
+               Image.new("RGBA", d)
+        if (w.tran < 0):
+            retn.putpalette(p)
+        return retn
     def WriteFunc(d, w):
         cpal = string_at(w[0].cpal, w[0].clrs * 3)
-        list = d.contents.value
+        list = d.contents.value[0]
         if (len(list) == 0):
             list.append(Image.new("RGBA", (w[0].xdim, w[0].ydim)))
         tail = len(list) - 1
@@ -321,26 +341,26 @@ def GIF_Load(file):
         list[tail].paste(base, (w[0].frxo, w[0].fryo), tran)
         list[tail].info = {"delay" : w[0].time}
         if (w[0].ifrm != (w[0].nfrm - 1)):
-            list.append(list[max(0, tail - int(w[0].mode == 3))].copy())
+            trgt = (tail, d.contents.value[1])[w[0].mode == 3]
+            list.append(list[trgt].copy() if (trgt >= 0) else
+                        fill(w[0], (w[0].xdim, w[0].ydim), cpal))
+            if (w[0].mode != 3):
+                d.contents.value[1] = w[0].ifrm
             if (w[0].mode == 2):
-                if (w[0].tran >= 0):
-                    base = Image.new("RGBA", (w[0].frxd, w[0].fryd))
-                else:
-                    base = Image.new("L", (w[0].frxd, w[0].fryd), w[0].bkgd)
-                    base.putpalette(cpal)
-                list[tail + 1].paste(base, (w[0].frxo, w[0].fryo))
+                list[tail + 1].paste(fill(w[0], (w[0].frxd, w[0].fryd), cpal),
+                                                (w[0].frxo, w[0].fryo))
     try: file = open(file, "rb")
     except IOError: return []
     file.seek(0, 2)
     size = file.tell()
     file.seek(0, 0)
-    list = []
+    list = [[], -1]
     CDLL(("%s.so", "%s.dll")[system() == "Windows"] % "./gif_load"). \
     GIF_Load(file.read(), size,
              CFUNCTYPE(None, PT(py_object), PT(GIF_WHDR))(WriteFunc),
              None, pointer(py_object(list)), 0)
     file.close()
-    return list
+    return list[0]
 
 def GIF_Save(file, fext):
     list = GIF_Load("%s.gif" % file)
