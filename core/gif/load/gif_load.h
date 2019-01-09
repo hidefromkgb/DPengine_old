@@ -46,7 +46,7 @@ extern "C" {
 #define _GIF_SWAP(h) ((GIF_BIGE)? ((uint16_t)(h << 8) | (h >> 8)) : h)
 
 #pragma pack(push, 1)
-typedef struct {                 /** ======== frame writer info: ======== **/
+struct GIF_WHDR {                /** ======== frame writer info: ======== **/
     long xdim, ydim, clrs,       /** global dimensions, palette size      **/
          bkgd, tran,             /** background index, transparent index  **/
          intr, mode,             /** interlace flag, frame blending mode  **/
@@ -56,7 +56,7 @@ typedef struct {                 /** ======== frame writer info: ======== **/
     struct {                     /** [==== GIF RGB palette element: ====] **/
         uint8_t R, G, B;         /** [color values - red, green, blue   ] **/
     } *cpal;                     /** current palette                      **/
-} GIF_WHDR;
+};
 #pragma pack(pop)
 
 enum {GIF_NONE = 0, GIF_CURR = 1, GIF_BKGD = 2, GIF_PREV = 3};
@@ -84,7 +84,8 @@ static long _GIF_LoadHeader(unsigned gflg, uint8_t **buff, void **rpal,
 }
 
 /** [ internal function, do not use ] **/
-static long _GIF_LoadFrame(uint8_t **buff, long *size, uint8_t *bptr) {
+static long _GIF_LoadFrame(uint8_t **buff, long *size,
+                           uint8_t *bptr, uint8_t *blen) {
     typedef uint16_t GIF_H;
     const long GIF_HLEN = sizeof(GIF_H), /** to rid the scope of sizeof **/
                GIF_CLEN = 1 << 12;    /** code table length: 4096 items **/
@@ -103,7 +104,7 @@ static long _GIF_LoadFrame(uint8_t **buff, long *size, uint8_t *bptr) {
         return -3; /** min LZW size is out of its nominal [2; 8] bounds **/
     if ((ctbl = (1L << ctsz)) != (mask & _GIF_SWAP(*(GIF_H*)(*buff + 1))))
         return -2; /** initial code is not equal to min LZW size **/
-    for (curr = ctbl++; curr; code[--curr] = 0); /** actual color codes **/
+    for (curr = ++ctbl; curr; code[--curr] = 0); /** actual color codes **/
 
     /** getting codes from stream (--size makes up for end-of-stream mark) **/
     for (--(*size), bszc = -ccsz, prev = curr = 0;
@@ -129,9 +130,10 @@ static long _GIF_LoadFrame(uint8_t **buff, long *size, uint8_t *bptr) {
                         } /** prev = TD? => curr < ctbl = prev **/
                         code[ctbl] = (uint32_t)prev + (code[prev] & 0xFFF000);
                     } /** appending SP / MP decoded pixels to the frame **/
-                    iter = (ctbl <= curr)? prev : curr;
-                    prev = (long)((code[iter] >> 12) & 0xFFF);
-                    for (bptr += prev++; (iter &= 0xFFF) >> ctsz;
+                    prev = (long)code[iter = (ctbl > curr)? curr : prev];
+                    if ((bptr += (prev = (prev >> 12) & 0xFFF)) > blen)
+                        continue; /** skipping pixels above frame capacity **/
+                    for (prev++; (iter &= 0xFFF) >> ctsz;
                         *bptr-- = (uint8_t)((iter = (long)code[iter]) >> 24));
                     (bptr += prev)[-prev] = (uint8_t)iter;
                     if (ctbl < GIF_CLEN) { /** appending the code table **/
@@ -159,8 +161,10 @@ static long _GIF_LoadFrame(uint8_t **buff, long *size, uint8_t *bptr) {
     ANIM: implementation-specific data (e.g. a structure or a pointer to it)
     SKIP: number of frames to skip before resuming
  **/
-GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
-                       void (*eamf)(void*, GIF_WHDR*), void *anim, long skip) {
+GIF_EXTR long GIF_Load(void *data, long size,
+                       void (*gwfr)(void*, struct GIF_WHDR*),
+                       void (*eamf)(void*, struct GIF_WHDR*),
+                       void *anim, long skip) {
     const long    GIF_BLEN = (1 << 12) * sizeof(uint32_t);
     const uint8_t GIF_EHDM = 0x21, /** extension header mark              **/
                   GIF_FHDM = 0x2C, /** frame header mark                  **/
@@ -210,7 +214,7 @@ GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
         uint8_t tran;        /** transparent color index                  **/
     } *egch = 0;
     #pragma pack(pop)
-    GIF_WHDR wtmp, whdr = {0};
+    struct GIF_WHDR wtmp, whdr = {0};
     long desc, blen;
     uint8_t *buff;
 
@@ -229,7 +233,7 @@ GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
     whdr.xdim = _GIF_SWAP(ghdr->xdim);
     whdr.ydim = _GIF_SWAP(ghdr->ydim);
     for (whdr.bptr = buff, whdr.bkgd = ghdr->bkgd, blen = --size;
-       ((desc = *whdr.bptr++) != GIF_EOFM) && (blen >= 0); /** sic: '>= 0' **/
+        (blen >= 0) && ((desc = *whdr.bptr++) != GIF_EOFM); /** sic: '>= 0' **/
          blen = _GIF_SkipChunk(&whdr.bptr, blen) - 1) /** count all frames **/
         if (desc == GIF_FHDM) {
             fhdr = (struct GIF_FHDR*)whdr.bptr;
@@ -242,11 +246,11 @@ GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
             whdr.fryo = (whdr.fryd > whdr.fryo)? whdr.fryd : whdr.fryo;
             whdr.ifrm++;
         }
-    blen = whdr.frxo * whdr.fryo * (long)sizeof(*whdr.bptr) + GIF_BLEN;
-    GIF_MGET(whdr.bptr, ((unsigned long)blen), anim, 1)
+    blen = whdr.frxo * whdr.fryo * (long)sizeof(*whdr.bptr);
+    GIF_MGET(whdr.bptr, (unsigned long)(blen + GIF_BLEN + 2), anim, 1)
     whdr.nfrm = (desc != GIF_EOFM)? -whdr.ifrm : whdr.ifrm;
-    for (whdr.bptr += GIF_BLEN, whdr.ifrm = -1; /** load all frames **/
-        (skip < ((whdr.nfrm < 0)? -whdr.nfrm : whdr.nfrm)) && (size >= 0);
+    for (whdr.bptr += GIF_BLEN, whdr.ifrm = -1; blen /** load all frames **/
+     && (skip < ((whdr.nfrm < 0)? -whdr.nfrm : whdr.nfrm)) && (size >= 0);
          size = (desc != GIF_EOFM)? ((desc != GIF_FHDM) || (skip > whdr.ifrm))?
                 _GIF_SkipChunk(&buff, size) - 1 : size - 1 : -1)
         if ((desc = *buff++) == GIF_FHDM) { /** found a frame **/
@@ -255,7 +259,8 @@ GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
             whdr.clrs = _GIF_LoadHeader(ghdr->flgs, &buff, (void**)&whdr.cpal,
                                         fhdr->flgs, &size, sizeof(*fhdr));
             if ((skip <= ++whdr.ifrm) && ((whdr.clrs <= 0)
-            ||  (_GIF_LoadFrame(&buff, &size, whdr.bptr) < 0)))
+            ||  (_GIF_LoadFrame(&buff, &size,
+                                 whdr.bptr, whdr.bptr + blen) < 0)))
                 size = -(whdr.ifrm--) - 1; /** failed to load the frame **/
             else if (skip <= whdr.ifrm) {
                 whdr.frxd = _GIF_SWAP(fhdr->frxd);
@@ -282,8 +287,8 @@ GIF_EXTR long GIF_Load(void *data, long size, void (*gwfr)(void*, GIF_WHDR*),
                 eamf(anim, &wtmp);
             }
         }
-    whdr.bptr -= GIF_BLEN;
-    GIF_MGET(whdr.bptr, ((unsigned long)blen), anim, 0)
+    whdr.bptr -= GIF_BLEN; /** for excess pixel codes ----v (here & above) **/
+    GIF_MGET(whdr.bptr, (unsigned long)(blen + GIF_BLEN + 2), anim, 0)
     return (whdr.nfrm < 0)? (skip - whdr.ifrm - 1) : (whdr.ifrm + 1);
 }
 
