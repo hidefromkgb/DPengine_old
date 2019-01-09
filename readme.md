@@ -1,5 +1,10 @@
 # DPengine
 
+**[INFORMATION:]** This branch only exists for backward compatibility, since
+its Git history is an utter mess; [refer here](https://github.com/hidefromkgb/DPengine)
+to get the updated version with fully restored and linearized history dating
+back to the project\`s inception in 2014.
+
 An alternative experimental engine for
 [Desktop Ponies](https://github.com/RoosterDragon/Desktop-Ponies)
 written in C and GLSL and focused on performance. Don\`t trust GitHub if it
